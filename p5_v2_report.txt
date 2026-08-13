@@ -1,0 +1,137 @@
+AI 视频流水线 P5-v2 质量迭代报告（保持原剧本，双帧锚定 + 1344x768 + 后处理）
+========================================================================
+生成时间: 2026-08-13 11:26:36
+工作目录: D:\ai-video-pipeline
+
+背景: P5 首版三问题——清晰度低(640x480)/画面形变(只传首帧)/手部幻影。
+本版按提升方案重跑：分辨率 1344x768(16:9,32倍数) + 双帧锚定(first+last) + FL2VA 规范 prompt + 后处理。
+
+一、任务一：关键帧重生成（6 张 = 3 镜头 × 首尾帧，1344x768）
+------------------------------------------------------------------------
+模型: Z-Image Turbo（z-image-power-nodes 官方节点 ZSamplerTurbo2）via ComfyUI 127.0.0.1:8188
+UNET: z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors (weight_dtype=default)
+CLIP: qwen3_4b_fp8_scaled.safetensors (type=lumina2) / VAE: ae.safetensors
+节点: EmptyZImageLatentImage //ZImagePowerNodes(landscape=True, ratio=16:9 widescreen, size=small -> 1344x768)
+      StylePromptEncoder2 //ZImagePowerNodes(style=none) + ZSamplerTurbo2(steps=8, denoise=1.0, turbo_creativity=off)
+
+【镜头 1】
+  首帧 shot1_first.png: seed=196333997 prompt_id=0d14c012-78aa-4bcc-bbc0-7d043dd3964a 耗时=20.2s 尺寸=1344x768
+  尾帧 shot1_last.png: seed=574684506 prompt_id=ca064066-c363-4fde-b908-e430ba789303 耗时=30.1s 尺寸=1344x768
+  首尾一致性 VLM: score=80 same_character=True same_scene=True same_composition=True pass=True
+    action_progression: 首帧角色撑伞在便利店门前驻足/行走，尾帧角色已行至门口并伸手拉门把手，构成‘接近店门—开门进入’的连贯动作延续。
+    diff: 挎包由首帧的右侧换到尾帧的左侧；尾帧雨伞露出木质弯柄与浅色伞杆，与首帧深色伞杆不完全一致；机位由正面略转为侧面，背景由店铺正面招牌变为门口与夜街霓虹，招牌文字细节不对应。
+    opinion: 同一角色、同一雨夜便利店场景，动作连贯延续，仅道具细节与机位角度存在轻微不一致，整体一致性成立。
+
+【镜头 2】
+  首帧 shot2_first.png: seed=438791265 prompt_id=840152ec-7c45-48c4-bc82-06032495e009 耗时=15.1s 尺寸=1344x768
+  尾帧 shot2_last.png: seed=585371986 prompt_id=fd1cd909-8127-40f6-ad43-26eb41175bf5 耗时=40.1s 尺寸=1344x768
+  首尾一致性 VLM: score=75 same_character=True same_scene=True same_composition=True pass=True
+    action_progression: 首帧低头查看掌中硬币，尾帧双手持纸币并抬头望向前方，构成‘付钱’动作的连贯延续：从清点零钱到拿出纸钞、视线由下至上抬起，动作与情绪衔接自然。
+    diff: 手持道具由硬币变为纸币；背景细节不一致（首帧为吊灯、戴帽厨师与墙上黑屏，尾帧为天花板日光灯、窗外夜景与不同群演）；机位由偏侧面微调为偏正面。
+    opinion: 同一角色、同一小吃店场景、构图基本一致，付款动作连贯延续，仅道具与背景细节存在轻微生成瑕疵，整体一致性良好。
+
+【镜头 3】
+  首帧 shot3_first.png: seed=420343283 prompt_id=8ab8489b-1538-4be9-a4e0-d34a2cb44157 耗时=50.1s 尺寸=1344x768
+  尾帧 shot3_last.png: seed=291704153 prompt_id=fc2224bc-97cc-4df3-84d8-0f221e561f4f 耗时=15.0s 尺寸=1344x768
+  首尾一致性 VLM: score=78 same_character=True same_scene=True same_composition=True pass=True
+    action_progression: 首帧角色低头用指尖捏着粉色票券正要放到柜台上，尾帧票券已落在柜台面、手指仍轻触票券，放票的动作自然延续。
+    diff: 首帧两侧有门框前景遮挡、背景为商品货架，尾帧背景变为店门玻璃门与木质柜角；肩带颜色不一（深棕 vs 橄榄绿）；票券花纹颜色略有差异；机位稍远且视角轻微偏移。
+    opinion: 角色造型、场景与构图高度一致且动作连贯，可判定为同一镜头的延续，仅背景陈设与配件细节存在轻微不一致。
+
+二、任务二：视频生成（双帧锚定 first+last）+ 拼接
+------------------------------------------------------------------------
+模型: MiniMax H3 fl2va（双帧锚定）via ComfyUI 127.0.0.1:8188
+UNET: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+CLIP: qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (type=minimax)
+视频VAE: minimax_h3_video_vae_fp16 / 音频VAE: minimax_h3_audio_vae_fp32
+参数: 1344x768, length=124(输出~124帧/5s@24fps), steps=25, denoise=1.0, sampler=res_multistep, scheduler=simple, seed 随机
+prompt: 官方 FL2VA 三段式（对齐指令 + integrated_multimodal_description / overall_soundscape / non_diegetic_music）
+
+【镜头 1】 seed=744025253 耗时=474.8s 帧长=124 steps=25 双帧锚定=True
+   first_frame=shot1_first.png  last_frame=shot1_last.png
+   prompt_id=b576d85d-bc46-4c84-b47f-d42322d3c71b  ComfyUI输出=p5v2_shot1_00001_.mp4
+   VLM审查: score=85 action_coherent=True char_consistent=True pass=True
+   deformation: 无明显肢体扭曲或崩坏；轻微AI瑕疵：伞柄在不同帧间由深色弯钩变为浅木色弯钩，背景便利店招牌与贴条文字为乱码。
+   opinion: 动作连贯、人物一致性高，仅有轻微道具穿帮，整体质量合格。
+
+【镜头 2】 seed=603026691 耗时=431.4s 帧长=124 steps=25 双帧锚定=True
+   first_frame=shot2_first.png  last_frame=shot2_last.png
+   prompt_id=dd1e120f-bf85-47b6-8ea8-8c0bb95bc25c  ComfyUI输出=p5v2_shot2_00001_.mp4
+   VLM审查: score=85 action_coherent=True char_consistent=True pass=True
+   deformation: 无
+   opinion: 动作连贯自然、无崩坏变形，角色与定妆图高度一致，仅手中硬币变纸币存在轻微道具连续性瑕疵，整体质量优良。
+
+【镜头 3】 seed=991827364 耗时=460.8s 帧长=124 steps=25 双帧锚定=True
+   first_frame=shot3_first.png  last_frame=shot3_last.png
+   prompt_id=32545d03-6f7e-4e40-94fa-e1e2776f2080  ComfyUI输出=p5v2_shot3_r1_00001_.mp4
+   VLM审查: score=88 action_coherent=True char_consistent=True pass=True
+   deformation: 无
+   opinion: 视频动作连贯自然、角色一致性良好且无明显AI变形崩坏，可通过审核。
+
+  视频生成总耗时: 1367.0s
+重试记录:
+  关键帧 shot3_last: 重试 2 次，最终 seed=291704153
+  视频 shot3: 重试 1 次，最终 seed=991827364
+  角色一致性参考说明: P4 定妆图 ref_half.png 为棕卷发/粗框眼镜/西方面孔，与任务书红线人设（细框眼镜/黑短发）及 storyboard 矛盾；v2 视频 VLM 审查改用本镜头首帧关键帧作为角色一致性参考。
+
+拼接（3 段 -> output/out/video_silent_v2.mp4）:
+  ffmpeg: 视频 concat=n=3:v=1:a=0 重编码 libx264 crf 18 + pix_fmt yuv420p
+          音频 [0:a][1:a]acrossfade=d=0.25 -> [a1][2:a]acrossfade=d=0.25
+  video_silent_v2.mp4: 时长 15.500000s, video=h264 1344x768
+
+三、任务三：音频重做（配音 + BGM + 混音）
+------------------------------------------------------------------------
+配音: shot3 narration「雨还在下，他走得不快。」 edge-tts zh-CN-XiaoxiaoNeural -> narration_v2.mp3 (2.736s)
+  narration 定位在 shot3 起始 10.0s（新时间轴 3×5s）
+BGM: ffmpeg 合成低沉环境底噪 55Hz+110Hz sine + brown noise, low volume, fade in 2s / out 2.5s
+混音: narration(adelay) + BGM(volume=0.16) amix -> final_v2.mp4（视频流 copy 自 video_silent_v2.mp4）
+
+四、任务四：后处理（治质感）
+------------------------------------------------------------------------
+RIFE 补帧 24->48fps: ComfyUI Frame-Interpolation, ckpt=rife49.pth multiplier=2, fast_mode=True, ensemble=False, dtype=float16
+  -> output/tmp/p5v2_rife_48fps.mp4 (prompt_id=db68e937-d378-4c11-8b56-1d905e7a2391, 耗时 160.0s)
+放大 1344x768 -> 1920x1080: ffmpeg lanczos（B 站横屏规格）
+  说明: RealESRGAN_x4plus 为 4x 模型，对 48fps 全程 ~744 帧做 4x 再缩回计算量过大；
+        1344->1920 仅 1.43x，用 lanczos（任务书兜底项）更干净无 AI 伪细节。
+音频回混: final_v2.mp4 音轨 copy 回 1080p 成片 -> output/out/final_v2_1080p.mp4
+
+五、终验（ffprobe + 响度）
+------------------------------------------------------------------------
+  final_v2_1080p.mp4: 时长 15.479004s, size 15353006 bytes
+    视频: h264 1920x1080 @ 48/1 (15.479004s)
+    音频: aac 32000Hz 2ch (15.456000s)
+  响度检测(volumedetect): mean=-32.2 dB, max=-9.1 dB
+
+六、验收标准对照
+------------------------------------------------------------------------
+  [通过] 6 张关键帧落盘，每镜头首尾一致性 VLM 评分 >=70
+  [通过] 3 段视频双帧锚定生成，VLM 审查通过，形变明显少于首版
+  [通过] 最终成片 1920x1080
+  [通过] 帧率 48fps
+  [通过] 时长 15.5s (13-18s)
+  [通过] 有音轨
+  [通过] 报告完整可追溯（seed/prompt_id/耗时/重试/审查/拼接/音频/后处理/终验）
+
+七、产物清单
+------------------------------------------------------------------------
+  [OK] output\frames_v2\shot1_first.png (1301438 bytes)
+  [OK] output\frames_v2\shot1_last.png (1276994 bytes)
+  [OK] output\frames_v2\shot2_first.png (1439434 bytes)
+  [OK] output\frames_v2\shot2_last.png (1345633 bytes)
+  [OK] output\frames_v2\shot3_first.png (1596233 bytes)
+  [OK] output\frames_v2\shot3_last.png (1242630 bytes)
+  [OK] output\clips_v2\shot1.mp4 (2050109 bytes)
+  [OK] output\clips_v2\shot2.mp4 (1548453 bytes)
+  [OK] output\clips_v2\shot3.mp4 (1936620 bytes)
+  [OK] output\out\video_silent_v2.mp4 (7562663 bytes)
+  [OK] output\out\final_v2.mp4 (7569356 bytes)
+  [OK] output\out\final_v2_1080p.mp4 (15353006 bytes)
+
+红线遵守说明
+------------------------------------------------------------------------
+  - 保持原剧本：3 镜头/选题/角色（阿迟：细框眼镜/湿发黑短发/深灰羊毛大衣/深色帆布斜挎包）全部不变
+  - 分辨率统一 1344x768（16:9，32 倍数），关键帧和视频均按此出
+  - 视频生成双帧锚定（first_frame + last_frame 都传）
+  - 所有产物落盘 D:\ai-video-pipeline\output\（frames_v2/ clips_v2/ out/ tmp/）
+  - 未触碰模拟器/adb；全程 ComfyUI + ffmpeg + edge-tts + Python
+  - 报告只写已实现项
