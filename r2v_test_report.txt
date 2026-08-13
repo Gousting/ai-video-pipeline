@@ -1,0 +1,128 @@
+R2V 参考生视频最小验证报告（角色 + 动作结合）
+================================================
+日期：2026-08-13
+目的：验证 MiniMax H3 的 R2V（MiniMaxH3ReferenceToVideo / ref2va）能否
+      用「参考图锁角色 + 参考视频锁动作」产出自然角色运动，
+      替换此前 I2V 双帧模式（空间错乱 / 动作丢失）。
+
+一、结论（先给答案）
+------------------------------------------------
+R2V 这条路【通】。用「参考图锁角色 identity + 参考视频锁动作 motion」能同时做到
+角色锁定 + 自然动作 + 稳定运镜，且明显优于 I2V 双帧模式。
+
+核心发现：
+1. 角色锁定：两次运行均稳定锁定阿迟（东方面孔 / 黑短发 / 细框眼镜 / 深灰大衣 / 斜挎包），
+   未变成参考视频里的人。这是 R2V 相对 I2V 的最大收益。
+2. 动作迁移：强烈依赖参考视频的「动作清晰度」。
+   - 用「全身背影走路」参考 → 动作丢失（角色僵立只推镜，score 62）。
+   - 用「下半身腿部步态特写（黑底）」参考 → 动作自然复刻（缓步走来、腿部迈步、
+     重心前移连贯，score 88）。
+3. 运镜 / 空间：两次均通过（运镜平滑、背景稳定不漂移），仅霓虹灯牌有轻微乱码闪烁
+   （H3 生成文字的通病，prompt 已要求「无文字」但仍偶发）。
+
+二、动作模板来源与 URL
+------------------------------------------------
+模板 v1（失败，用于首次验证）：
+  来源：Pixabay「Man, Adult, Road」https://pixabay.com/videos/man-adult-road-walking-walk-76621/
+  预处理：4K 裁剪右上路牌 → 裁 t=4~8s → 24fps → 1344x768。
+  问题：单人背影走路，腿部动作被身体遮挡，动作信号弱 → 动作未迁移。
+
+模板 v2（成功，最终使用）：
+  来源：Pixabay「Walk, Slow, Legs」https://pixabay.com/videos/walk-slow-legs-feet-shoes-47129/
+  预处理：1920x1080 → 裁 t=3~7s → 24fps → 1344x768（黑底，腿部步态特写）。
+  VLM 审查：single_person=true / action_clear=true / no_text_logo=true。
+  关键：黑底腿部步态特写，动作信号最干净 → 动作成功迁移。
+
+（下载均走 Clash 代理 http://127.0.0.1:7890；直连被 Cloudflare 403。）
+
+三、角色参考图
+------------------------------------------------
+原定使用 output/frames_v2/shot1_first.png，但该图是「写实电影感全景（Classic Film
+Photo）+ 人物偏小偏侧」，不符合 R2V 锁身份所需的清晰半身，也不符合目标「新海诚动画风」。
+故按任务书 fallback 用 Z-Image 重生成：
+  产物：output/r2v_test/character_ref.png（1344x768，正面半身，新海诚动画风）
+  prompt 见 output/r2v_test/character_ref_prompt.txt
+  VLM 审查：is_anime_style=true / face_clear=true / matches_character=true。
+
+四、R2V 参数
+------------------------------------------------
+节点：MiniMaxH3ReferenceToVideo（ref2va，非 I2V）
+模型加载：
+  UNETLoader : minimax_h3_ref2va_pruned_int8_convrot.safetensors（unet/ 目录）
+  CLIPLoader : qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (type=minimax)
+  VAELoader  : minimax_h3_video_vae_fp16.safetensors / minimax_h3_audio_vae_fp32.safetensors
+采样：width=1344 height=768 length=124(≈5s@24fps) steps=25 denoise=1.0
+      sampler=res_multistep scheduler=simple
+参考：ref_images = [character_ref.png]（ref_image_0）
+      ref_videos = [motion_template_legs 24fps 帧序列 96 帧]（ref_video_0）
+      ref_image_size = match（快；身份保真足够，未用 max）
+ref_videos 输入为 IMAGE 帧序列：ffmpeg 拆帧 + KJNodes LoadImagesFromFolderKJ 读入。
+autogrow 输入经 API 用扁平点号键传入："ref_images.ref_image_0" / "ref_videos.ref_video_0"
+（已从 comfy_api 源码 + 实际运行确认）。
+prompt 用官方 ref 格式（给每个参考分配职责），见 output/r2v_test/r2v_prompt_v2.txt：
+  <Picture 1> = 角色身份（阿迟，不得变成参考视频里的人）
+  <Video 1>   = 动作（复刻腿部步态循环）
+  integrated_multimodal_description / overall_soundscape（雨声）/ non_diegetic_music(N/A)
+
+五、VLM 审查结果（qwen3.8-max）
+------------------------------------------------
+运行 v1（背影全身走路参考）：
+  score=62  character_locked=TRUE  motion_natural=FALSE  spatial_stable=TRUE
+  判定：角色锁住、空间稳定，但角色僵立原地只推镜，动作未复刻 → 不通过。
+
+运行 v2（腿部步态特写参考）：
+  score=88  character_locked=TRUE  motion_natural=TRUE  spatial_stable=TRUE
+  VLM：角色黑短发/细框眼镜/深灰大衣/斜挎包均与参考图一致；双手插兜缓步走来，
+       腿部迈步、重心前移逐帧连贯，真实行走；运镜平滑、背景稳定，仅招牌文字轻微乱码。
+  判定：通过（pass=true）。
+
+六、与 I2V 双帧模式的差异（R2V vs I2V）
+------------------------------------------------
+I2V 双帧（P5 五版死胡同）：
+  - 首尾帧差异大 → 空间错乱（锅飘、视角乱转）
+  - 首尾帧差异小 → 动作丢失（角色僵着只有推镜）
+  根因：I2V 靠两张关键帧插值，角色 identity 与 motion 都从关键帧猜测，无独立锚点。
+
+R2V（ref2va）：
+  - 角色 identity 由参考图独立锚定（两次都锁住，不随动作漂移）
+  - 动作由参考视频独立锚定（腿部步态清晰时能自然复刻）
+  - 运镜/空间由 prompt 独立描述（两次都稳定）
+  三者解耦，各自有独立输入锚点 → 这是替换 I2V 的正路。
+  代价：动作迁移质量取决于参考视频的动作清晰度（背影全景弱、步态特写强）。
+
+七、产物清单
+------------------------------------------------
+output/r2v_test/
+  motion_template_legs.mp4    # 动作模板 v2（最终使用，1344x768@24fps 4s）
+  motion_template.mp4         # 动作模板 v1（背影走路，失败样本）
+  character_ref.png           # 角色参考图（Z-Image 新海诚动画风半身）
+  r2v_prompt.txt / r2v_prompt_v2.txt
+  r2v_result.mp4              # R2V 结果 v1（动作丢失）
+  r2v_result_v2.mp4           # R2V 结果 v2（最终，通过）
+  r2v_result_v2_review.json   # VLM 审查（score 88, 三维全 true）
+  r2v_result_review.json      # VLM 审查 v1（score 62）
+  motion_template_legs_review.json / motion_template_review.json
+  character_ref_review.json
+  motion_frames/              # v2 拆帧（96 张 24fps）
+scripts/
+  r2v_video_gen.py            # R2V 工作流（ref2va + autogrow 点号键）
+  r2v_review.py               # VLM 审查（check_motion / check_char / review）
+
+八、重试记录
+------------------------------------------------
+1. 动作模板 v1（背影走路）跑出 score 62、motion_natural=false → 换步态特写参考重试。
+2. ref2va 权重文件初次加载报错 "shape [5376,14336] invalid for input of size 39784549"
+   → 排查发现 models/unet/minimax_h3_ref2va_pruned_int8_convrot.safetensors 是
+   半截下载（10.2GB / 应 19.5GB），从 ModelScope
+   （modelscope.cn/models/Comfy-Org/MiniMax-H3，diffusion_models/ 目录）
+   断点续传补齐到 20,970,379,616 字节后重跑成功。
+3. LoadImagesFromFolderKJ 报 "missing 2 required positional arguments"
+   → 该 KJNodes 节点函数签名要求 image_load_cap/start_index 必填（虽 INPUT_TYPES 标 optional），
+   补上 image_load_cap=0 / start_index=0 后解决。
+
+九、验收对照
+------------------------------------------------
+1. [x] 产出 R2V 验证视频 output/r2v_test/r2v_result_v2.mp4（1344x768@24fps 5.17s 带雨声）
+2. [x] VLM 审查有明确结论：character_locked=true / motion_natural=true / spatial_stable=true
+3. [x] 报告写清 R2V vs I2V 对比结论（R2V 通，I2V 双帧不通）
+4. [x] 每步 git commit + push
