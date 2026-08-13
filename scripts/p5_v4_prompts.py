@@ -43,7 +43,7 @@ CHAR_CN = (
 CHAR_EN = (
     "a lean young man in his late twenties with an East Asian face, "
     "slightly messy black short hair wet with raindrops, thin-rimmed glasses, "
-    "a half-wet dark grey wool overcoat and a dark canvas messenger bag"
+    "a half-wet dark grey wool overcoat over a dark shirt and a dark canvas messenger bag"
 )
 
 # 三修复（中文，用于关键帧 prompt）
@@ -51,7 +51,8 @@ FIX_SIGN_CN = "便利店招牌是纯色发光霓虹灯牌，无任何文字字�
 FIX_PROP_CN = "几枚硬币和一张绿色五元纸币"
 
 # 三修复（英文，用于视频 prompt）
-FIX_SIGN_EN = "the signboard is a glowing neon light panel with no text, stable and undistorted"
+FIX_SIGN_EN = ("all signs, signboards and neon light boxes are pure glowing color panels "
+               "with no text, no letters, no characters, stable and undistorted")
 FIX_PROP_EN = "a green five-yuan banknote and several coins"
 
 
@@ -153,19 +154,20 @@ VIDEO_PROMPTS: dict[str, str] = {
     ),
     "shot3": (
         f"{_video_align(3)}\n\n"
-        f"integrated_multimodal_description: In {STYLE_EN}, {CHAR_EN}'s hand gently "
-        f"places a green five-yuan banknote back on the counter, then he turns and "
-        f"pushes open the glass door, opening a black umbrella and stepping out into "
-        f"the rain; the camera follows him toward the door and holds on his back "
-        f"through the glass as he walks away into the rain (type=follow, amplitude=small, "
-        f"speed=slow). The banknote remains a green five-yuan paper note — it never "
-        f"turns red and never becomes coins. {FIX_SIGN_EN}. Neon reflections on the "
-        f"wet rain-soaked ground, layered gradient sky, delicate rain streaks and "
-        f"bokeh, fresh transparent color palette, beautiful detailed lighting, "
-        f"cinematic composition. The framing moves from an interior mid shot to a "
-        f"doorway frame-within-frame as he departs.\n\n"
-        f"overall_soundscape: The convenience store doorbell chime, rain growing "
-        f"louder as the door opens, receding footsteps on the wet pavement.\n\n"
+        f"integrated_multimodal_description: In {STYLE_EN}, {CHAR_EN} facing the camera "
+        f"gently places a bright green five-yuan banknote back on the wooden counter, "
+        f"his fingertips resting on the note; he then slowly raises his head and looks "
+        f"toward the glass door, his other hand holding a folded black umbrella; the "
+        f"glass door stands behind him with rain and white street light glowing through "
+        f"it. The banknote's paper is distinctly green and it stays green throughout the "
+        f"entire shot — it never turns red, never turns purple, and never becomes coins; "
+        f"no red or purple banknote appears at any moment. {FIX_SIGN_EN}. Neon reflections on "
+        f"the wet rain-soaked ground, layered gradient sky, delicate rain streaks and "
+        f"bokeh, fresh transparent color palette, beautiful detailed lighting, cinematic "
+        f"composition. The camera stays at a fixed medium shot with only a very slight "
+        f"drift-in (type=static, amplitude=minimal, speed=none).\n\n"
+        f"overall_soundscape: Rain pattering outside the glass door, a faint convenience "
+        f"store doorbell chime, quiet interior hum.\n\n"
         f"non_diegetic_music: A soft piano phrase fading out gently as the shot ends."
     ),
 }
