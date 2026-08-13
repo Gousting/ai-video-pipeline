@@ -1,0 +1,4 @@
+﻿[2026-08-12 19:39:12] 任务一(script)完成: output\sb\storyboard.json 已存在并通过 validate_storyboard.py (EXIT=0, shots=3, total_duration=15)
+[2026-08-12 19:49:26] 任务二(image)完成: shot1.png(80) shot2.png(80, 重试1次) shot3.png(82) VLM审查通过; prompts: frames\shot_1..3.md
+[2026-08-12 20:04:46] 任务三(character)完成: char\char_bible.json(schema通过) + char\ref_front.png/ref_half.png; ref_image=char/ref_half.png(ref2va); 一致性VLM通过(overall=90)
+[2026-08-12 20:06:03] 测试与报告完成: py_compile通过 + pytest 18 passed + p4_report.txt 已生成

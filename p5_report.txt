@@ -1,0 +1,86 @@
+AI 视频流水线 P5 视频 + 音频环节报告（端到端 demo）
+========================================================
+生成时间: 2026-08-13 09:17:34
+工作目录: D:\ai-video-pipeline
+
+一、任务一：视频生成（3 段 + 拼接）
+--------------------------------------------------------
+模型: MiniMax H3 fl2va（首帧驱动） via ComfyUI 127.0.0.1:8188
+UNET: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+CLIP: qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (type=minimax)
+视频VAE: minimax_h3_video_vae_fp16 / 音频VAE: minimax_h3_audio_vae_fp32
+参数: 640x480, length=120(->124帧), steps=20, denoise=1.0, sampler=res_multistep, scheduler=simple, seed 随机
+
+【镜头 1】 seed=542333671 耗时=107.0s 帧长=120
+   prompt_id=8eed3a62-c4e3-47da-9dad-0783f9b85e02  ComfyUI输出=p5_shot1_00001_.mp4
+   prompt: 一个二十七八岁、清瘦、穿深灰色半湿大衣、黑色短发微乱带雨珠、戴细框眼镜、斜挎深色帆布包的年轻男人，在雨夜撑黑伞走到便利店...
+   VLM审查: score=88 action_coherent=True char_consistent=True pass=True
+   deformation: 无
+   opinion: 撑伞驻足、转身走向店门的动作连贯自然，角色一致性好，无明显崩坏，仅背影帧伞杆被身体遮挡略显含糊，整体合格。
+
+【镜头 2】 seed=161888177 耗时=80.8s 帧长=120
+   prompt_id=8e51fdf5-0975-435e-9959-fbb6ac9c1a73  ComfyUI输出=p5_shot2_00001_.mp4
+   prompt: 穿深灰色大衣、戴细框眼镜的年轻男人站在便利店关东煮柜台前，低头数零钱，指尖捏着一张五元纸币微微一顿；中景固定机位，镜头保...
+   VLM审查: score=86 action_coherent=True char_consistent=True pass=True
+   deformation: 个别帧手指轻微扭曲、手持小物件（似纸币）在帧间有轻微形变，无严重肢体崩坏
+   opinion: 动作连贯自然、角色一致性高，仅手部物件轻微morphing，整体质量合格。
+
+【镜头 3】 seed=311742069 耗时=80.5s 帧长=120
+   prompt_id=aedf9eb7-6564-4ef8-95e8-48fd22ba2ca5  ComfyUI输出=p5_shot3_00002_.mp4
+   prompt: 年轻男人把一张五元纸币轻轻放回便利店柜台台面，随即转身推开玻璃门，撑开黑伞走进雨里；镜头跟拍他放钱、转身、推门的连续动作...
+   VLM审查: score=80 action_coherent=True char_consistent=True pass=True
+   deformation: 雨伞伞面形状在帧间不一致，第4帧伞面被门框割裂成两块、视觉上不连贯，门边手部模糊偏红、略有变形
+   opinion: 动作连贯、角色一致，仅雨伞与手部细节存在轻微瑕疵，整体质量合格。
+
+重试记录:
+  - shot1: 无重试（首版通过 score=88）
+  - shot2: 无重试（首版通过 score=86）
+  - shot3: 第1次 seed=805601261 score=60（末帧人物融化/伞面崩坏/背景油画化）-> 重试
+            第2次 seed=311742069 score=80 通过（仅伞面/手部轻微瑕疵）
+  视频生成总耗时: 268.3s
+
+拼接（3 段 -> output/out/video_silent.mp4）:
+  ffmpeg: 视频 concat=n=3:v=1:a=0 重编码 libx264 crf 18 + pix_fmt yuv420p
+          音频 [0:a][1:a]acrossfade=d=0.25 -> [a1][2:a]acrossfade=d=0.25, apad 到 15.5s
+  video_silent.mp4: 时长 15.500000s, video=h264 640x480, audio=aac（H3 生成的环境音，保留）
+
+二、任务二：音频环节（配音 + BGM + 混音）
+--------------------------------------------------------
+配音: storyboard 3 镜头中仅 shot3 有 narration「雨还在下，他走得不快。」(shot1/shot2 为空)
+  edge-tts --voice zh-CN-XiaoxiaoNeural -> output/tmp/narration.mp3 (2.736s, 24000Hz mono)
+BGM: 宿主机无本地无版权音乐素材库（仅发现 TTS 角色语音样本，不可作 BGM）
+  -> 按任务书兜底用 ffmpeg 合成低沉环境底噪: 55Hz+110Hz 低频 sine + brown 噪声, 低音量, fade in 2s/out 2.5s
+  -> output/tmp/bgm.wav (15.5s, 32000Hz stereo)
+混音: narration(adelay 10.5s 到 shot3 起始) + BGM(volume=0.16, 即配音音量约 20% 以下) amix
+  final.mp4: 视频流 copy 自 video_silent.mp4, 音频流替换为混音结果 (aac 128k 32000Hz)
+
+三、终验（ffprobe + 响度 + VLM 抽帧）
+--------------------------------------------------------
+  final.mp4: 时长 15.5s, size 2453042 bytes
+    视频: h264 640x480 15.500000s
+    音频: aac 32000Hz 2ch 15.500000s
+  响度检测(volumedetect): mean=-32.2 dB, max=-9.2 dB  -> 无爆音
+  VLM 抽帧(t=10s) 检查: normal=True  人物面部、手部及身体结构自然，构图合理，无明显崩坏或变形，画面可正常播放。
+
+四、验收标准对照
+--------------------------------------------------------
+  [通过] output/out/final.mp4 存在可播放, 时长 15.5s (13-18s)
+  [通过] 3 段视频角色一致（每段 VLM 比对首帧 vs ref_half.png, char_consistent=true）
+  [通过] 有音轨（BGM+shot3配音），无爆音(max -9.2dB)，音画同步(音/视频均 15.5s)
+  [通过] 报告完整可追溯（本报告由 p5_report_gen.py 生成，含 seed/prompt_id/耗时/重试/审查/拼接/音频/终验明细）
+
+五、产物清单
+--------------------------------------------------------
+  [OK] output\clips\shot1.mp4 (580290 bytes)
+  [OK] output\clips\shot2.mp4 (406057 bytes)
+  [OK] output\clips\shot3.mp4 (748875 bytes)
+  [OK] output\out\video_silent.mp4 (2447968 bytes)
+  [OK] output\out\final.mp4 (2453042 bytes)
+
+红线遵守说明
+--------------------------------------------------------
+  - 所有生成物落盘 D:\ai-video-pipeline\output\clips\ 与 output\out\，可追溯（各 shot*.json 记录 seed/prompt_id/prompt）
+  - 视频生成仅调 ComfyUI 127.0.0.1:8188 的 MiniMax H3 fl2va（首帧驱动），未用其它视频模型
+  - 未触碰模拟器/adb；全程 ComfyUI API + ffmpeg + edge-tts
+  - BGM 未引入版权音频：本地无无版权素材，用 ffmpeg 合成低沉环境底噪
+  - 报告只写已实现项

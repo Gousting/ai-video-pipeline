@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-video-pipeline.local/schemas/character.schema.json",
+  "title": "Character Bible Schema",
+  "description": "AI 视频流水线角色圣经 JSON Schema（四要素 + 禁忌 + 定妆图路径）。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["name", "appearance", "personality", "speech_style"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "角色名，必填。"
+    },
+    "appearance": {
+      "type": "string",
+      "minLength": 1,
+      "description": "外貌，必填。"
+    },
+    "personality": {
+      "type": "string",
+      "minLength": 1,
+      "description": "性格，必填。"
+    },
+    "speech_style": {
+      "type": "string",
+      "minLength": 1,
+      "description": "说话方式，必填。"
+    },
+    "taboos": {
+      "type": "string",
+      "description": "禁忌（如：不能出现某元素/某动作）。"
+    },
+    "ref_image": {
+      "type": "string",
+      "minLength": 1,
+      "description": "定妆图路径（如 char/A_定妆.png，相对 output/char/ 或绝对路径）。"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+pipeline: ai-video
+version: 0.1
+stages:
+  - id: script
+    agent: visual-storyteller        # 创意层角色
+    input:  user_brief.md            # 用户选题/方向/关键剧情点
+    output: storyboard.json
+    gate: script-review              # 验收：双 agent 互评
+  - id: image
+    agent: image-prompt-engineer
+    input: storyboard.json
+    output: frames/ + char_bible.json
+    gate: vlm-review
+  - id: character
+    agent: narrative-designer
+    input: frames/ + char_bible.json
+    output: char_pack/ (圣经+定妆图+ref2va参考图)
+    gate: consistency-check
+  - id: video
+    agent: orchestration            # opencode 编排，调 make-video.ts
+    input: char_pack/ + storyboard.json
+    output: clips/*.mp4
+    gate: vision-audit (>=70, 自动重跑)
+  - id: audio
+    agent: orchestration            # edge-tts 配音 + BGM + 字幕 + 混音
+    input: storyboard.json + clips/
+    output: final.mp4
+    gate: audio-check (时长/响度/音画同步)
+  - id: final
+    agent: short-video-editing-coach
+    input: final.mp4
+    output: acceptance.md
+    gate: content-rules
+artifacts:
+  root: D:\ai-video-pipeline\output\
+  layout: {storyboard: sb/, frames: frames/, char_pack: char/, clips: clips/, final: out/}
