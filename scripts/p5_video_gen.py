@@ -25,7 +25,7 @@ import requests
 
 COMFY = "http://127.0.0.1:8188"
 POLL_INTERVAL = 5          # 秒
-POLL_TIMEOUT = 1200        # 秒（20 分钟）
+POLL_TIMEOUT = 3600        # 秒（60 分钟，多镜头排队时单镜头可能排到 20 分钟后）
 
 # H3 权重名（ComfyUI 已加载，原样复用）
 UNET_NAME = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
