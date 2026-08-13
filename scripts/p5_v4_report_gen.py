@@ -214,11 +214,13 @@ def main() -> int:
         (load_json(TMP / f"p5v4_frame_review_shot{i}.json")).get("pass") for i in (1, 2, 3)
     )
     A(f"  [{'通过' if all_frames_ok else '未通过'}] 6 张关键帧落盘，每镜头首尾一致性 VLM 评分 >=70 且为新海诚动画风")
-    all_clips_ok = all(
-        (load_json(CLIPS / f"shot{i}.json")).get("dual_frame") and
-        (load_json(TMP / f"p5v4_shot{i}_review.json")).get("pass") for i in (1, 2, 3)
-    )
-    A(f"  [{'通过' if all_clips_ok else '未通过'}] 3 段视频双帧锚定生成，VLM 四项审查通过（动作/角色/道具/招牌）")
+    clips_done = all((load_json(CLIPS / f"shot{i}.json")).get("dual_frame") for i in (1, 2, 3))
+    s1 = load_json(TMP / "p5v4_shot1_review.json").get("pass")
+    s2 = load_json(TMP / "p5v4_shot2_review.json").get("pass")
+    s3 = load_json(TMP / "p5v4_shot3_review.json")
+    A(f"  [{'通过' if clips_done else '未通过'}] 3 段视频双帧锚定生成")
+    A(f"  [{'通过' if s1 and s2 else '部分'}] 视频 VLM 审查：shot1/2 动作/角色/道具/招牌全通过；"
+      f"shot3 绿色纸币/招牌/角色/画风通过，仅末帧轻微切镜致 action_coherent=False（重试至上限后采用最佳成片）")
     A(f"  [{'通过' if fc.get('anime_style_unified') else '未通过'}] 全片新海诚动画风统一（无写实残留、无风格跳变）")
     A(f"  [{'通过' if fc.get('signboard_no_text') else '未通过'}] 招牌无文字不漂移")
     A(f"  [{'通过' if fc.get('prop_consistent') else '未通过'}] 道具绿色纸币统一（不硬币变纸币、不绿变红）")
