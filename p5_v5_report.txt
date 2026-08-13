@@ -1,0 +1,166 @@
+AI 视频流水线 P5-v5 报告（修正首尾帧策略 + 运镜规范，根治空间错乱）
+========================================================================
+生成时间: 2026-08-13 15:11:13
+工作目录: D:\ai-video-pipeline
+
+背景: P5-v4 已出片但存在空间错乱（锅位置漂移/视角乱转）。根因：首尾帧用「动作开始/动作完成」
+      两帧，场景元素位置差异过大，触发 H3 FL2VA 官方硬约束（首尾帧差异大会在过渡中扭曲/重设计）。
+      本版修正：尾帧 = 首帧 PIL 同源中心裁剪 78% 放大推近（不再 Z-Image 生成）；动作靠 prompt 描述；
+      运镜写全三要素（push in with small amplitude at slow speed）。保留三修复。
+
+〇、风格锚定（全片统一）
+------------------------------------------------------------------------
+  新海诚动画电影风格：唯美细腻光影，清新通透色调，雨夜霓虹灯在积水地面倒映，层次丰富的天空，细腻雨丝和光斑（bokeh），电影感构图，柔和渐变的天空色（蓝紫到暖橙）
+  英文锚定短语："Makoto Shinkai anime film style, beautiful detailed lighting, fresh transparent color palette, neon reflections on wet rain-soaked ground, layered gradient sky, delicate rain streaks and bokeh, cinematic composition"
+  角色人设对齐 frames_v2：东方面孔 / 黑短发带雨珠 / 细框眼镜 / 深灰半湿羊毛大衣 / 深色帆布斜挎包。
+
+一、核心修正（本版与 v4 的关键差异）
+------------------------------------------------------------------------
+  1) 尾帧策略：尾帧不再用 Z-Image 生成（v4 错误源）。改用 PIL 对首帧做中心 78% 裁剪
+     再 LANCZOS 放大回原尺寸（推近 1.28 倍视角）。两张图 100% 同源同构图，锅/柜台/门位置
+     完全一致，差异仅「机位距离」，落在官方允许范围内。
+  2) 动作靠 prompt：收伞/数钱/放回纸币写进 integrated_multimodal_description 时间线，
+     每镜头只一个主要动作，模型按文字生成动作而非靠两帧差异过渡。
+  3) 运镜规范：镜头运动三要素（type + amplitude + speed）写全，统一
+     "push in with small amplitude at slow speed"，禁止裸写镜头推近。
+
+二、任务一：首帧生成（3 张 = 3 镜头 × 首帧，新海诚风；尾帧 PIL 同源裁剪）
+------------------------------------------------------------------------
+模型: Z-Image Turbo（z-image-power-nodes 官方节点 ZSamplerTurbo2）via ComfyUI 127.0.0.1:8188
+UNET: z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors (weight_dtype=default)
+CLIP: qwen3_4b_fp8_scaled.safetensors (type=lumina2) / VAE: ae.safetensors
+节点: EmptyZImageLatentImage //ZImagePowerNodes(landscape=True, ratio=16:9 widescreen, size=small -> 1344x768)
+      StylePromptEncoder2 //ZImagePowerNodes(style=none) + ZSamplerTurbo2(steps=8, denoise=1.0, turbo_creativity=off)
+
+【镜头 1】
+  首帧 shot1_first.png: seed=496413741 prompt_id=229a8972-4464-4f44-997e-2a18c0c0586a 耗时=25.4s 尺寸=1344x768
+  尾帧 shot1_last.png: PIL 同源裁剪 crop=0.78 box=[147, 84, 1196, 683] 推近 1.282x LANCZOS（非 Z-Image 生成）
+  首帧 VLM: score=93 anime_style=True char_consistent=True signboard_no_text=True prop_consistent=True pass=True
+    opinion: 画风、人设与招牌均达标，可作为撑伞镜头首帧使用。
+
+【镜头 2】
+  首帧 shot2_first.png: seed=864794963 prompt_id=df54bf96-9aad-41e3-b4b3-5fc498c63bbd 耗时=40.1s 尺寸=1344x768
+  尾帧 shot2_last.png: PIL 同源裁剪 crop=0.78 box=[147, 84, 1196, 683] 推近 1.282x LANCZOS（非 Z-Image 生成）
+  首帧 VLM: score=90 anime_style=True char_consistent=True signboard_no_text=True prop_consistent=True pass=True
+    opinion: 画风、角色、招牌与道具均达标，该关键帧审查通过。
+
+【镜头 3】
+  首帧 shot3_first.png: seed=22091051 prompt_id=6cfa7b30-f88c-49f8-a5e9-94abd54315d1 耗时=15.1s 尺寸=1344x768
+  尾帧 shot3_last.png: PIL 同源裁剪 crop=0.78 box=[147, 84, 1196, 683] 推近 1.282x LANCZOS（非 Z-Image 生成）
+  首帧 VLM: score=92 anime_style=True char_consistent=True signboard_no_text=True prop_consistent=True pass=True
+    opinion: 画风、角色、灯牌与道具均达标，该关键帧审查通过。
+
+三、任务二：视频生成（双帧 = 首帧 + PIL 同源裁剪尾帧，新海诚风 prompt）
+------------------------------------------------------------------------
+模型: MiniMax H3 fl2va（双帧锚定）via ComfyUI 127.0.0.1:8188
+UNET: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+CLIP: qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (type=minimax)
+视频VAE: minimax_h3_video_vae_fp16 / 音频VAE: minimax_h3_audio_vae_fp32
+参数: 1344x768, length=124(输出~124帧/5s@24fps), steps=25, denoise=1.0, sampler=res_multistep, scheduler=simple
+prompt: 官方 FL2VA 三段式（对齐指令/时间线/音效/音乐）+ 新海诚风格锚定 + 运镜三要素 + 三修复约束
+
+【镜头 1】 seed=342323682 耗时=408.9s 帧长=124 steps=25 双帧锚定=True
+   first_frame=shot1_first.png  last_frame=shot1_last.png
+   prompt_id=0d37b2f8-d13a-49fc-9bf4-2993a2a8f242  ComfyUI输出=p5v5_shot1_00001_.mp4
+   VLM审查: score=93 action_coherent=True char_consistent=True prop_consistent=True signboard_no_text=True anime_style=True spatial_stability=True pass=True
+   deformation: 无
+   spatial_comment: 左侧玻璃门、背景便利店、招牌、电线杆等固定物体相对位置跨帧稳定，仅有轻微推近运镜，无漂移、扭曲或重新排布。
+   prop_comment: 本镜头为撑伞伫立/行走的雨夜戏，不涉及零钱道具，道具连续性判true。
+   signboard_comment: 背景便利店招牌为红白条纹纯色发光霓虹灯牌，无文字无乱码，跨帧稳定不漂移。
+   opinion: 角色、场景、画风高度统一，运镜平滑自然，是一段合格的雨夜霓虹唯美镜头。
+
+【镜头 2】 seed=18765044 耗时=843.9s 帧长=124 steps=25 双帧锚定=True
+   first_frame=shot2_first.png  last_frame=shot2_last.png
+   prompt_id=a89cba37-8e25-48f0-a83f-2c611f25d06c  ComfyUI输出=p5v5_shot2_00001_.mp4
+   VLM审查: score=92 action_coherent=True char_consistent=True prop_consistent=True signboard_no_text=True anime_style=True spatial_stability=True pass=True
+   deformation: 无
+   spatial_comment: 关东煮锅、燃气灶、蓝碗、柜台、右侧容器及背景便利店玻璃门、行人相对位置稳定，仅镜头缓慢推近，无漂移、扭曲或重新排布。
+   prop_comment: 手中始终为几枚硬币加一张绿色五元纸币，纸币未变红/变紫，硬币与纸币未互换，数零钱动作跨帧连续。
+   signboard_comment: 顶部招牌/雨棚仅为白底红色斜纹装饰，背景便利店为绿白红条纹灯带，均无可见文字或乱码，跨帧稳定不漂移。
+   opinion: 动作、角色、道具、空间与画风均稳定一致的高质量镜头。
+
+【镜头 3】 seed=544853259 耗时=1246.9s 帧长=124 steps=25 双帧锚定=True
+   first_frame=shot3_first.png  last_frame=shot3_last.png
+   prompt_id=57d08171-49eb-4759-94a6-d2649fc5b477  ComfyUI输出=p5v5_shot3_00001_.mp4
+   VLM审查: score=90 action_coherent=True char_consistent=True prop_consistent=True signboard_no_text=True anime_style=True spatial_stability=True pass=True
+   deformation: 无
+   spatial_comment: 镜头缓慢匀速推近，收银终端、柜台、玻璃窗、天花灯管及室外路灯、灯牌的相对布局保持一致，无漂移、扭曲或重新排布。
+   prop_comment: 前两帧手边纸币为绿色五元，颜色稳定未变红/变紫，无硬币纸币互变；后几帧因镜头推近纸币移出画框，但未出现道具替换或变色。
+   signboard_comment: 左侧粉色竖排霓虹灯牌仅为纯色发光加抽象圆形光点，无可读文字或乱码，跨帧位置稳定、无漂移。
+   opinion: 角色、道具、空间与画风均稳定一致，动作自然，该镜头通过审查。
+
+  视频生成总耗时: 2499.7s
+重试记录:
+  首帧 shot3: 重试 1 次，最终 seed=22091051
+  角色一致性参考说明: 角色人设对齐 frames_v2（东方面孔/黑短发带雨珠/细框眼镜/深灰半湿羊毛大衣/深色帆布斜挎包），非 P4 西方面孔定妆图。视频 VLM 审查以本镜头首帧关键帧作为角色一致性参考。
+
+拼接（3 段 -> output/out/video_silent_v5.mp4）:
+  ffmpeg: 视频 concat=n=3:v=1:a=0 重编码 libx264 crf 18 + pix_fmt yuv420p
+          音频 [0:a][1:a]acrossfade=d=0.25 -> [a1][2:a]acrossfade=d=0.25
+  video_silent_v5.mp4: 时长 15.500000s, video=h264 1344x768
+
+四、任务四：音频（钢琴收束）
+------------------------------------------------------------------------
+钢琴收束音: numpy 合成 C4/E4/G4/C5, 5 harmonics exponential decay, 1.4s fade-out，时长 4.0s，结尾渐弱 fade out（无爆音）-> output/tmp/piano_ending.wav
+配音: shot3 narration「雨还在下，他走得不快。」 edge-tts zh-CN-XiaoxiaoNeural -> narration_v5.mp3 (2.736s)
+  narration 定位在 shot3 起始 10.33s；钢琴定位在 11.5s（贴齐片尾）
+环境底噪: brown noise lowpass 300Hz volume 0.12, fade in 2s / out 2.5s
+混音: narration(adelay) + 钢琴(adelay) + 底噪 amix + alimiter limit=0.95 (防爆音) -> final_v5.mp4（视频流 copy）
+
+五、任务五：后处理（RIFE 补帧 + 放大）
+------------------------------------------------------------------------
+RIFE 补帧 24->48fps: ComfyUI RIFE VFI, ckpt=rife49.pth multiplier=2, fast_mode=True, ensemble=False, dtype=float16
+  -> output/tmp/p5v5_rife_48fps.mp4 (prompt_id=ddd8a452-fc79-44e0-87ef-47c3531e881a, 耗时 70.9s)
+放大 1344x768 -> 1920x1080: ffmpeg lanczos（B 站横屏规格）
+音频回混: final_v5.mp4 音轨 copy 回 1080p 成片 -> output/out/final_v5_1080p.mp4
+
+六、终验（ffprobe + 响度 + 成片 VLM）
+------------------------------------------------------------------------
+  final_v5_1080p.mp4: 时长 15.479167s, size 12397358 bytes
+    视频: h264 1920x1080 @ 48/1 (15.479167s)
+    音频: aac 32000Hz 2ch (15.456000s)
+  响度检测(volumedetect): mean=-28.2 dB, max=-5.0 dB
+  成片 VLM 终验: anime_style_unified=True signboard_no_text=True prop_consistent=True spatial_stability=True pass=True
+    style_comment: 六个帧均统一为新海诚式动画电影风：层次分明的黄昏云空、细腻雨丝与光斑、湿地面霓虹倒映、清新通透色调，人物与背景绘制风格一致，无写实摄影残留，无风格跳变。
+    signboard_comment: 各镜头招牌/灯牌均为纯色发光体：镜头一为红色白格发光横幅，镜头二背景为绿白条纹灯带，镜头三左侧粉色竖排灯牌仅点缀抽象圆形光点装饰，均未出现可读文字、数字、字母或乱码字符。
+    prop_comment: 镜头二中手中为一张绿色五元纸币并伴有几枚硬币，镜头三放回柜台的仍为同一张绿色纸币，未出现硬币变纸币、纸币变红色的情况。
+    spatial_comment: 各镜头内部固定物体跨帧稳定：镜头一的玻璃门、红色灯牌、电线杆；镜头二的关东煮锅、燃气灶、蓝碗、背景店门与人流；镜头三的收银机、柜台、窗框与竖排灯牌，均只随推近运镜均匀放大，无漂移、扭曲或重新排布。
+    opinion: 全片画风统一、招牌无文字、道具连贯、镜头内空间稳定，仅存跨镜头招牌配色瑕疵，总体终验通过。
+
+七、验收标准对照
+------------------------------------------------------------------------
+  [通过] 空间稳定：锅/柜台/门位置跨帧不漂移（VLM 空间稳定性审查通过）
+  [通过] 运镜自然（push in 小幅慢速，三要素写全）
+  [通过] 招牌无文字
+  [通过] 绿色纸币统一
+  [通过] shot3 钢琴收束
+  [通过] 最终成片 1920x1080
+  [通过] 帧率 48fps
+  [通过] 时长 15.5s (13-18s)
+
+八、产物清单
+------------------------------------------------------------------------
+  [OK] output\frames_v5\shot1_first.png (1316659 bytes)
+  [OK] output\frames_v5\shot1_last.png (1139739 bytes)
+  [OK] output\frames_v5\shot2_first.png (1281541 bytes)
+  [OK] output\frames_v5\shot2_last.png (1142800 bytes)
+  [OK] output\frames_v5\shot3_first.png (1471444 bytes)
+  [OK] output\frames_v5\shot3_last.png (1285139 bytes)
+  [OK] output\clips_v5\shot1.mp4 (1356553 bytes)
+  [OK] output\clips_v5\shot2.mp4 (1002264 bytes)
+  [OK] output\clips_v5\shot3.mp4 (1799918 bytes)
+  [OK] output\out\video_silent_v5.mp4 (5626552 bytes)
+  [OK] output\out\final_v5.mp4 (5633409 bytes)
+  [OK] output\out\final_v5_1080p.mp4 (12397358 bytes)
+  [OK] output\tmp\piano_ending.wav (512044 bytes)
+
+红线遵守说明
+------------------------------------------------------------------------
+  - 每个子任务完成后 git add -A && git commit && git push
+  - Z-Image 节点名带 //ZImagePowerNodes 后缀，提交前 GET /object_info 确认全名
+  - 尾帧只用 PIL 同源裁剪推近，严禁 Z-Image 生成动作完成态尾帧
+  - 每镜头只一个主要动作；运镜三要素写全
+  - 保留三修复：招牌无文字光招牌 / 绿色五元纸币统一 / shot3 钢琴收束
+  - 产物落盘 D:\ai-video-pipeline\output\（frames_v5/ clips_v5/ out/ tmp/）
+  - 未触碰模拟器/adb；全程 ComfyUI + ffmpeg + edge-tts + Python + numpy + PIL
+  - 报告只写已实现项
