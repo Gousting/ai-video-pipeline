@@ -1,0 +1,306 @@
+Phase D · audio 衔接（p5_v6_audio.py）成片自测报告
+============================================================
+
+执行环境
+--------
+- OS: Windows 11 (PowerShell 5.1)
+- 工作目录: D:\ai-video-pipeline
+- Python: 3.13.9
+- ffmpeg / ffprobe: Gyan.FFmpeg 8.1.2
+- edge-tts: 7.2.8
+- numpy: 已安装（钢琴合成复用）
+
+本阶段目标
+----------
+Phase C 之后 video_with_overlay_*.mp4 已经有「片头标题卡 + 三段字幕条 + 片尾卡」，但
+p5_v5_audio.py 默认 VIDEO_SILENT = video_silent_v5.mp4，绕开了 overlay，得到的成片
+没有字幕/标题/片尾。本阶段把 audio 阶段衔接 overlay 烧录产物，产出真正完整的最终成片。
+
+按硬约束：不改 p5_v5_audio.py 原文件、不动 filmstrip.py / r2v_review.py / overlay.py /
+render_overlays.py / compose_final.py / overlays/、不动 pipeline.yaml、不碰 git。
+本期只复制一份 p5_v6_audio.py 并指向 Phase C 产物，混音链路（narration.adelay / piano_start
+按 duration 算 / 底噪 amix / alimiter）保持原样——video_with_overlay.mp4 的音频流直接
+来自 video_silent_v5.mp4，零漂移衔接。
+
+
+新增 / 改了什么
+----------------
+新增文件：
+  scripts\p5_v6_audio.py                       Phase D 主脚本（audio 衔接）
+  output\out\video_with_overlay.mp4            Phase C compose_final.py 烧录产物（含片头/字幕/片尾 + 主视频音频）
+  output\out\final_v6.mp4                      Phase D 最终成片（video + 配音 + 钢琴 + 底噪）
+  output\tmp\piano_ending_v6.wav               钢琴收束音（4.000s）
+  output\tmp\narration_v6.mp3                  edge-tts 配音「雨还在下，他走得不快。」（2.736s）
+  output\tmp\ambient_v6.wav                    brown noise 底噪（15.5s，fade in 2s / fade out 2.5s）
+  output\tmp\final_v6_audio.wav                final_v6 音轨导出（用于秒级 RMS 分析）
+  output\tmp\p5v6_audio_meta.json              Phase D meta（input_video/output/timing 等）
+  output\out\final_v6.verify\                  6 张抽帧 + verify_report.json + audio_stats.json
+  output\out\video_with_overlay.mp4.meta.json  Phase C 自动写出的 meta（保留）
+  output\out\video_with_overlay.mp4.verify\    Phase C 6 张抽帧 + verify_report.json（保留）
+
+未触碰（按硬约束）：
+  scripts\p5_v5_audio.py                        原 audio 阶段脚本一字未改
+  scripts\filmstrip.py, scripts\r2v_review.py  Phase A 产物
+  scripts\overlay.py, scripts\render_overlays.py, overlays\*  Phase B 产物
+  scripts\compose_final.py                      Phase C 产物
+  pipeline.yaml                                 阶段配置不动
+
+
+p5_v6_audio.py 与 p5_v5_audio.py 的差异（diff 完整列表）
+-------------------------------------------------
+唯一改动都是路径/字符串/header，没有任何混音逻辑变化（synth_piano / gen_narration /
+gen_ambient / mix 函数体一字未动）：
+
+  1. 头部 docstring 改成 v6 描述 + 一段 "差异（相对 p5_v5_audio.py）" 说明
+  2. VIDEO_SILENT = OUT / "video_with_overlay.mp4"           ← 之前 video_silent_v5.mp4
+  3. PIANO        = TMP / "piano_ending_v6.wav"              ← 之前 piano_ending.wav
+  4. NARRATION    = TMP / "narration_v6.mp3"                 ← 之前 narration_v5.mp3
+  5. AMBIENT      = TMP / "ambient_v6.wav"                   ← 之前 ambient_v5.wav
+  6. FINAL        = OUT / "final_v6.mp4"                     ← 之前 final_v5.mp4
+  7. META         = TMP / "p5v6_audio_meta.json"             ← 之前 p5v5_audio_meta.json
+  8. 两处 print 日志字符串（"video_silent_v5 时长" → "video_with_overlay 时长"；
+                          "final_v5 -> " → "final_v6 -> "）
+  9. meta dict 多 4 个字段（compose_phase=D / audio_phase=p5_v6 / input_video / output）
+
+混音链路一字未动（与 v5 完全等价 → 衔接零漂移）：
+  - synth_piano：C4/E4/G4/C5 基频+5 泛音指数衰减，1.4s fade-out
+  - gen_narration：edge-tts zh-CN-XiaoxiaoNeural 配音
+  - gen_ambient：anoisesrc color=brown lowpass 300Hz volume 0.12 + 2s fade-in / 2.5s fade-out
+  - mix：narration.adelay=shot3_start*1000ms / piano.adelay=piano_start*1000ms / ambient 全程
+    → amix=inputs=3:normalize=0:duration=longest → alimiter limit=0.95
+  - main()：shot3_start = 10.0 if duration<=12 else round(duration*2/3,2)；
+            piano_start = round(duration-piano_dur,2) → 由 VIDEO_SILENT 时长动态决定
+
+
+端到端命令（实测可复现）
+----------------------
+Step 1：Phase C 烧录 overlay（一次性；如果 video_with_overlay.mp4 已存在可跳过）
+
+    python scripts\compose_final.py ^
+        --storyboard examples\sample_storyboard.json ^
+        --video output\out\video_silent_v5.mp4 ^
+        --out output\out\video_with_overlay.mp4 ^
+        --overlays-dir output\overlays_e2e
+
+Step 2：Phase D audio 衔接
+
+    python scripts\p5_v6_audio.py
+
+
+Phase C 实测输出（Step 1）
+--------------------------
+[compose_final] 主视频: D:\ai-video-pipeline\output\out\video_silent_v5.mp4 时长 15.500s 1344x768 audio=yes
+[compose_final] plan: title=yes end=yes subs=3 injected_demo=True
+[compose_final] 待烧录 5 层（按烧录顺序）:
+[compose_final]   - subtitle [0.000 → 5.000]   output\overlays_e2e\shot-01-subtitle-bar.png
+[compose_final]   - subtitle [5.000 → 10.000]  output\overlays_e2e\shot-02-subtitle-bar.png
+[compose_final]   - subtitle [10.000 → 15.000] output\overlays_e2e\shot-03-subtitle-bar.png
+[compose_final]   -    title [0.000 → 4.000]   output\overlays_e2e\title-card.mp4
+[compose_final]   -      end [11.500 → 15.500] output\overlays_e2e\end-card.mp4
+[compose_final] 产物: D:\ai-video-pipeline\output\out\video_with_overlay.mp4 时长 15.500s 1920x1080 audio=yes
+[compose_final] verify: 6/6 通过
+
+5 层烧录顺序：
+  1. 三段 subtitle-bar（先烧，作为下层；title-card 全屏覆盖前 4s）
+  2. title-card（再烧，盖在 [0,4s]；shot1 前段字幕被覆盖）
+  3. end-card（最后烧，盖在 [11.5s,15.5s]；shot3 末段字幕被覆盖）
+
+产物 ffprobe：
+  streams[0] video: h264 High 1920x1080 yuv420p 24fps, bit_rate ~2.78 Mb/s
+  streams[1] audio: aac LC 32kHz stereo, bit_rate ~128 kb/s
+  format duration: 15.500s
+
+
+Phase D 实测输出（Step 2）
+--------------------------
+[audio] video_with_overlay 时长 15.500s
+[audio] 钢琴收束音 -> D:\ai-video-pipeline\output\tmp\piano_ending_v6.wav (4.000s)
++ edge-tts --voice zh-CN-XiaoxiaoNeural --text 雨还在下，他走得不快。 --write-media D:\ai-video-pipeline\output\tmp\narration_v6.mp3
+[audio] narration -> D:\ai-video-pipeline\output\tmp\narration_v6.mp3 (2.736s)
++ ffmpeg ... anoisesrc=color=brown:duration=15.5:amplitude=0.5:seed=42 ... afade ... ambient_v6.wav
+[audio] shot3_start=10.33s piano_start=11.5s
++ ffmpeg ... -map 3:v -map [aout] -c:v copy -c:a aac -b:a 128k -ar 32000 -shortest final_v6.mp4
+[audio] final_v6 -> D:\ai-video-pipeline\output\out\final_v6.mp4
+
+关键 timing（由 VIDEO_SILENT 时长动态算出）：
+  - duration    = 15.500s  ← ffprobe(VIDEO_SILENT)
+  - shot3_start = 10.33s   ← duration > 12 → round(15.5 * 2 / 3, 2) = 10.33（narration.adelay=10330ms）
+  - piano_start = 11.5s    ← round(15.5 - 4.0, 2) = 11.5（piano.adelay=11500ms；钢琴 4s 贴齐 [11.5,15.5]）
+
+
+final_v6.mp4 ffprobe 验证
+--------------------------
+ffmpeg version 8.1.2-full_build-www.gyan.dev
+
+STREAM[0]
+  codec_name=h264
+  codec_type=video
+  profile=High
+  width=1920
+  height=1080
+  sample_aspect_ratio=1:1
+  pix_fmt=yuv420p
+  r_frame_rate=24/1
+  duration=15.500000
+  bit_rate=2783661
+  nb_frames=372
+  encoder=Lavc62.28.102 libx264
+
+STREAM[1]
+  codec_name=aac
+  codec_type=audio
+  profile=LC
+  sample_rate=32000
+  channels=2
+  channel_layout=stereo
+  duration=15.500000
+  bit_rate=128063
+  nb_frames=486
+  encoder=Lavf62.12.102
+
+FORMAT
+  duration=15.500000
+  size=5655414          (≈ 5.4 MB)
+  bit_rate=2918923      (≈ 2.92 Mb/s)
+  nb_streams=2
+
+✅ 视频流 h264 High 1920x1080 yuv420p 24fps；时长 15.5s 与 video_silent_v5 / video_with_overlay 完全一致
+✅ 音频流 aac LC 32kHz stereo 128 kb/s；时长 15.5s 满长（= 主视频时长，无截断）
+✅ 双流封装在 mp4 容器；总文件 5.4 MB
+
+
+抽帧验证（6/6 PASS，确认 overlay 经音频 remux 后仍在视频流上）
+----------------------------------------------------
+抽帧命令与 compose_final 一致，便于像素证据对比：
+
+    ffmpeg -y -ss <t> -i output\out\final_v6.mp4 -frames:v 1 -q:v 2 <out>.jpg
+
+像素判定规则与 compose_final.check_* 完全一致（暗背景 + accent/白字 = title/end-card；
+底部 bar 暗 + 白字 = subtitle）。
+
+| 时刻       | 标签              | 像素证据                                                              | pass |
+|------------|-------------------|-----------------------------------------------------------------------|------|
+| 1.50s      | title_card        | 暗背景 94.63% + accent/白字 2.44%                                     | ✅   |
+| 4.50s      | shot01_subtitle   | 底部 bar 暗 91.31% + 白字 3.38%（title-card 已结束，可见 shot1 字幕） | ✅   |
+| 7.50s      | shot02_subtitle   | 底部 bar 暗 89.55% + 白字 3.26%                                        | ✅   |
+| 10.50s     | shot03_subtitle   | 底部 bar 暗 90.31% + 白字 4.51%                                        | ✅   |
+| 15.30s     | end_card          | 暗背景 98.04% + accent/白字 1.55%（end-card 全屏覆盖）                  | ✅   |
+| 7.75s      | plain_mid         | 普通视频帧分布（dark 14.3% / mid 63.8% / bright 22.0%；参考）           | ✅   |
+
+抽帧图存于 output\out\final_v6.verify\*.jpg；汇总报告 verify_report.json 同步写出。
+与 Phase C video_with_overlay.mp4.verify 的 6 张同位置抽帧像素分布几乎完全一致
+（误差 < 0.01），证明 audio remux 没有破坏 overlay 烧录层（视频流 copy，未重编码）。
+
+
+音频内容验证（ffmpeg volumedetect + numpy 逐秒 RMS）
+-----------------------------------------
+ffmpeg volumedetect（全段）：
+
+    [Parsed_volumedetect_0] n_samples: 993280  (= 15.52s × 32kHz × 2ch → 满时长音频)
+    [Parsed_volumedetect_0] mean_volume: -28.2 dB    ← NOT -inf；音频有真实内容
+    [Parsed_volumedetect_0] max_volume: -5.0 dB     ← 在 alimiter limit=0.95 范围内
+
+逐秒 RMS（导出 final_v6 音轨 → numpy 算 per-second RMS/peak dBFS）：
+
+  sec | rms_dB | peak_dB | 含义
+  ----+--------+---------+----------------------------------------------
+   0  | -53.84 | -39.22  | ambient fade-in 起点（最低）
+   1  | -44.42 | -33.51  | ambient 渐入
+   2  | -43.11 | -33.33  | ambient 平稳（仅底噪）
+   3  | -43.03 | -31.93  | ambient 平稳
+   4  | -41.86 | -30.91  | ambient 平稳
+   5  | -42.44 | -30.88  | ambient 平稳
+   6  | -42.88 | -32.62  | ambient 平稳
+   7  | -43.03 | -33.70  | ambient 平稳
+   8  | -42.47 | -30.56  | ambient 平稳
+   9  | -42.49 | -31.30  | ambient 平稳（sec 9 仍是纯底噪）
+  10  | -24.64 | -10.93  | ← +narration（10.33s adelay）；RMS 跃升 18 dB
+  11  | -19.91 |  -4.95  | ← +piano（11.5s adelay）；RMS 到峰值，peak 撞 alimiter
+  12  | -21.34 |  -7.39  | narration + piano + ambient 三段叠加
+  13  | -27.36 | -17.05  | narration 已结束（2.736s @ 10.33 → 13.07s）；
+                           | piano + ambient
+  14  | -33.90 | -22.17  | piano 衰减中 + ambient 准备 fade-out
+  15  | -48.58 | -35.82  | ambient fade-out 末段（最末 0.5s）
+
+→ 这张表清晰证明 3 段音频都在成片里：
+  • ambient：全程 sec 0-15 RMS ≈ -42 ~ -44 dB 平稳，fade-in/fade-out 完整
+  • narration：sec 10 起 RMS 跃升 18 dB，与 adelay=10330ms 完全吻合；sec 13 后回落
+  • piano：sec 11 起 RMS 进一步抬升，与 adelay=11500ms 完全吻合；sec 14 后衰减
+  • alimiter：peak -4.95 dB < -1 dB（对应 0.95 限幅），全程无爆音
+
+
+产物清单
+--------
+最终成片：
+  D:\ai-video-pipeline\output\out\final_v6.mp4           5,655,414 bytes  (video h264 + audio aac, 15.5s)
+
+Phase C 中间产物（保留供后续阶段复用 / 重新混音）：
+  D:\ai-video-pipeline\output\out\video_with_overlay.mp4     （含片头/字幕/片尾 + 主视频音频）
+  D:\ai-video-pipeline\output\out\video_with_overlay.mp4.verify\  6 张抽帧 + verify_report.json
+
+Phase D 中间产物：
+  D:\ai-video-pipeline\output\tmp\piano_ending_v6.wav    512,044 bytes  (4.000s 钢琴收束)
+  D:\ai-video-pipeline\output\tmp\narration_v6.mp3        16,416 bytes  (2.736s edge-tts 配音)
+  D:\ai-video-pipeline\output\tmp\ambient_v6.wav       1,984,078 bytes  (15.5s 底噪，fade in/out)
+  D:\ai-video-pipeline\output\tmp\final_v6_audio.wav   1,986,638 bytes  (成片音轨导出，便于二次分析)
+  D:\ai-video-pipeline\output\tmp\p5v6_audio_meta.json         641 bytes  (timing/voice/limiter 元信息)
+
+Phase D 验证产物：
+  D:\ai-video-pipeline\output\out\final_v6.verify\
+    000150_title_card.jpg          46,018 bytes
+    000450_shot01_subtitle.jpg    173,876 bytes
+    000750_shot02_subtitle.jpg    187,709 bytes
+    000775_plain_mid.jpg          187,437 bytes
+    001050_shot03_subtitle.jpg    238,259 bytes
+    001530_end_card.jpg            43,891 bytes
+    verify_report.json            (6/6 PASS)
+    audio_stats.json              (per-second RMS/peak dBFS)
+    verify_final_v6.py            (像素统计脚本；与 compose_final.check_* 同源)
+    audio_stats.py                (numpy per-second RMS 脚本)
+
+
+验收对照
+--------
+任务验收标准                          实测                                              结果
+──────────────────────────────────── ────────────────────────────────────────── ───────
+1. output/out/final_v6.mp4 生成       5,655,414 bytes 存在                           ✅
+2. ffprobe 1920x1080 h264 + aac       video h264 High 1920x1080 yuv420p +           ✅
+   duration ~15.5s                     audio aac LC 32kHz stereo；duration 15.500s
+3. 抽帧 overlay 烧在成片上             6/6 PASS（title_card / 3×subtitle /            ✅
+                                       end_card / plain_mid）；像素分布与
+                                       video_with_overlay.mp4 同位置几乎一致
+4. 音频有实际内容（配音+BGM+底噪）    volumedetect: n=993280 / mean=-28.2 dB /     ✅
+                                       max=-5.0 dB；逐秒 RMS 清晰呈现 3 段音频
+                                       的入场/退场时间点（10.33s 配音 / 11.5s 钢琴
+                                       / 0s 起底噪，15.5s 收尾）
+5. 报告写到 pD_report.txt             本文件                                           ✅
+
+硬约束遵守
+----------
+✅ 纯 Python + subprocess + ffmpeg + edge-tts + numpy（钢琴合成复用）
+✅ scripts\p5_v5_audio.py 未触碰（仅复制为 p5_v6_audio.py）
+✅ scripts\filmstrip.py、scripts\r2v_review.py 未触碰
+✅ scripts\overlay.py、scripts\render_overlays.py、overlays\* 未触碰
+✅ scripts\compose_final.py 未触碰（Step 1 复用现成脚本即可）
+✅ pipeline.yaml 未修改
+✅ 没 git init / 没改 git config / 没 push（用户负责推送）
+✅ 所有读写都在 D:\ai-video-pipeline 内
+
+
+已知限制 / 后续可改
+-------------------
+- audio 时长依赖 VIDEO_SILENT 时长：本期 VIDEO_SILENT = video_with_overlay.mp4
+  （15.500s），与 video_silent_v5.mp4 同样 15.500s → timing 与原 p5_v5 完全一致；
+  若上游改了主视频时长，shot3_start / piano_start 会按 duration 动态重算，无需改脚本。
+- piano_start = duration - 4s 与 end-card 起点 (duration - 4s) 完全重合 → 钢琴与
+  end-card 同步进入收束段；视觉/听觉收束同步。
+- narration.adelay=10330ms（shot3 起点）落在 [10.33, 13.07] 区间，与 shot3 字幕
+  [10, 15] 完全重叠 → 配音期间画面有 shot3 字幕底栏 + 配音语音。
+- end-card 区间 [11.5, 15.5] 全屏覆盖 → shot3 字幕底栏在 end-card 期间不可见；
+  这是 Phase C 既定行为（end-card 全屏盖住末段字幕），本期不调整。
+- audio 阶段脚本继续走"复制一份 v6"模式（不引入通用化），与既有 p5_vN_audio.py 体系
+  一致；后续若多 overlay 链路复用，可抽成共享模块（本期不动）。
+- 验证用的 verify_final_v6.py / audio_stats.py 写到 output\out\final_v6.verify\
+  下，是验证产物不是源码；如果想做回归测试可以挪到 tests/ 复用（本期不动）。
+- 配音语言：zh-CN-XiaoxiaoNeural（与 p5_v5 完全一致）；若想换音色只需改 p5_v6_audio.py
+  顶部 VOICE 常量，不影响混音链路。
