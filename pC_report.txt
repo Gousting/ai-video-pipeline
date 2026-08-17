@@ -1,0 +1,251 @@
+Phase C · overlay 烧录合成 自测报告
+============================================================
+
+执行环境
+--------
+- OS: Windows 11 (PowerShell 5.1)
+- 工作目录: D:\ai-video-pipeline
+- Python: 3.13.9 (Pillow 12.0.0)
+- ffmpeg / ffprobe: Gyan.FFmpeg 8.1.2
+
+新增文件
+--------
+scripts\compose_final.py           Phase C 主脚本（ffmpeg overlay filter 烧录 + 抽帧验证）
+
+未触碰（按硬约束）
+--------
+- scripts\filmstrip.py、scripts\r2v_review.py（Phase A 产物）
+- scripts\overlay.py、scripts\render_overlays.py、overlays\*.html（Phase B 产物）
+- pipeline.yaml（overlay 阶段已加好；不动）
+- audio 阶段脚本（p5_v5_audio.py 等）；仅在报告里写接接步骤
+
+
+设计要点
+--------
+CLI：
+    python scripts\compose_final.py ^
+        --storyboard examples\sample_storyboard.json ^
+        --video output\out\video_silent_v5.mp4 ^
+        --out output\out\video_with_overlay.mp4 ^
+        [--overlays-dir output\overlays_e2e]     默认 output\overlays
+        [--auto-overlay | --no-auto-overlay]    storyboard 无 overlay 字段时自动注入 demo（默认开）
+        [--fallback-engine pil|hyperframes]     传给 render_overlays.py（默认 pil）
+        [--no-audio]                            输出无音频（默认直通主视频音频）
+        [--width 1920 --height 1080]            输出分辨率（默认与 overlay 画布一致）
+        [--crf 18 --preset medium]              x264 编码参数
+        [--no-verify]                           跳过 ffprobe + 抽帧像素验证
+        [--render-clips-out PATH]               --videos 多段拼接时的中间文件（默认 <out>.concat.mp4）
+
+输入模式：
+- --video <single.mp4>        单段已拼接视频（典型：p5_v5_concat.py 产物 video_silent_v5.mp4）
+- --videos shot1.mp4 ...      多段 shot 视频；脚本按出现顺序 concat 成一段（无 acrossfade）
+
+核心流程：
+1. 读 storyboard.json → 收集 plan（顶层 title-card / end-card + 每个 shot 的 subtitle）。
+   - storyboard 有 overlay 字段 → 直接用；
+   - 无 overlay 字段 → 自动注入 demo（与 render_overlays.build_demo_storyboard 一致：
+     title-card.hyperframes + 每 shot 的 subtitle-bar.pil + end-card.hyperframes）。
+2. 检查 plan 里每个 overlay 的 expected_path 是否存在；
+   缺失则 subprocess 调 render_overlays.py（默认 fallback-engine=pil，HyperFrames 不可用时自动降级）。
+3. 准备主视频：--video 直接用；--videos 先 concat。
+4. 拼 ffmpeg -filter_complex，按时间烧录：
+   - per-shot subtitle-bars（先烧，作为下层；用 enable='between(t, shot_start, shot_end)'）
+   - title-card（再烧，在 [0, title_duration] 全屏覆盖；盖住 shot1 前段字幕）
+   - end-card（最后烧，在 [video_duration - end_duration, video_duration]；盖住 shot3 末段字幕）
+5. 视频流 libx264 + 像素格式归一化 yuv420p；主视频音频默认 -map 0:a? copy。
+   叠加层文件即使含音频也不主动 -map，自动丢弃（避免 BGM 叠加到最终成片）。
+6. 抽帧验证（默认开）：
+   - title-card @ title_duration*0.5：暗背景+accent 文字
+   - 每 shot subtitle @ shot 中点（避开 title-card/end-card 覆盖区）：底部 bar 暗像素+白字
+   - end-card @ video_duration - end_duration*0.5：暗背景+title/credit 文字
+   - 报告写到 <out>.verify\verify_report.json，jpg 帧同步写出便于人工复核。
+
+ffmpeg 滤镜链（完整版 5 层烧录）：
+    [0:v] scale=1920:1080:force_original_aspect_ratio=decrease,
+          pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black, setsar=1, format=yuv420p [v0];
+    [1:v] scale=1920:1080, format=rgba, setsar=1 [ov1];  # subtitle shot1
+    [2:v] scale=1920:1080, format=rgba, setsar=1 [ov2];  # subtitle shot2
+    [3:v] scale=1920:1080, format=rgba, setsar=1 [ov3];  # subtitle shot3
+    [4:v] scale=1920:1080:force_original_aspect_ratio=decrease,
+          pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black, setsar=1, format=yuv420p [ov4];  # title-card
+    [5:v] scale=1920:1080:force_original_aspect_ratio=decrease,
+          pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black, setsar=1, format=yuv420p [ov5];  # end-card
+    [v0][ov1] overlay=x=0:y=0:enable='between(t,0.000,5.000)':shortest=0   [v1];
+    [v1][ov2] overlay=x=0:y=0:enable='between(t,5.000,10.000)':shortest=0  [v2];
+    [v2][ov3] overlay=x=0:y=0:enable='between(t,10.000,15.000)':shortest=0 [v3];
+    [v3][ov4] overlay=x=0:y=0:enable='between(t,0.000,4.000)':shortest=0    [v4];
+    [v4][ov5] overlay=x=0:y=0:enable='between(t,11.542,15.542)':shortest=0  [v5]
+    -map [v5] -map 0:a? -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -c:a copy -sn
+
+为什么叠加层音频自动丢弃：ffmpeg 只有 -map 选中的流才会写到输出。叠加层 MP4 输入只取视频
+（[idx:v] 已被 filter_complex 用作 overlay 输入），不 -map [idx:a]，所以叠加层的音轨自动
+被丢掉；同时 -map 0:a? 直通主视频音频到输出，对应 audio 阶段后续按现有 p5_v5_audio.py 流程
+混音/替换。
+
+
+实测 1：简化版（单段 video_silent_v5.mp4 + 现有 overlays_e2e）
+-----------------------------------------------------------
+命令：
+    python scripts\compose_final.py ^
+        --storyboard examples\sample_storyboard.json ^
+        --video output\out\video_silent_v5.mp4 ^
+        --out output\out\video_with_overlay_simplified.mp4 ^
+        --overlays-dir output\overlays_e2e
+
+ffprobe 验证：
+  streams[0] video: h264 High profile, 1920x1080 yuv420p 24fps, bit_rate 2.78 Mb/s
+  streams[1] audio: aac LC 32kHz stereo, bit_rate 128 kb/s
+  format duration: 15.500s
+
+抽帧验证（6/6 PASS，报告 verify\verify_report.json）：
+
+| 时刻       | 标签              | 像素证据                                                              | pass |
+|------------|-------------------|-----------------------------------------------------------------------|------|
+| 1.50s      | title_card        | 暗背景 94.6% + accent 35 个橙色像素 + 2.7% 亮像素（白字）             | ✅   |
+| 4.50s      | shot01_subtitle  | 底部 bar 暗 91.3% + 白字 3.4%（title-card 已结束，可看到 shot1 字幕） | ✅   |
+| 7.50s      | shot02_subtitle  | 底部 bar 暗 89.5% + 白字 3.2%                                        | ✅   |
+| 10.50s     | shot03_subtitle  | 底部 bar 暗 90.4% + 白字 4.5%                                        | ✅   |
+| 15.30s     | end_card         | 暗背景 98.0% + 1.5% 亮像素（end-card 全屏覆盖）                      | ✅   |
+| 7.75s      | plain_mid        | 普通视频帧分布（shot2 画面+底部 bar 副参考）                          | ✅   |
+
+产物：
+- D:\ai-video-pipeline\output\out\video_with_overlay_simplified.mp4  (5,648,557 bytes)
+- D:\ai-video-pipeline\output\out\video_with_overlay_simplified.mp4.meta.json
+- D:\ai-video-pipeline\output\out\video_with_overlay_simplified.mp4.verify\
+    verify_report.json + 6 张 *.jpg 抽帧
+
+
+实测 2：完整版（--videos 三段 shot1/2/3 直接拼接 + 5 层 overlay）
+-----------------------------------------------------------
+命令：
+    python scripts\compose_final.py ^
+        --storyboard examples\sample_storyboard.json ^
+        --videos output\clips_v5\shot1.mp4 ^
+        --videos output\clips_v5\shot2.mp4 ^
+        --videos output\clips_v5\shot3.mp4 ^
+        --out output\out\video_with_overlay_full.mp4 ^
+        --overlays-dir output\overlays_e2e
+
+中间拼接产物：video_with_overlay_full.concat.mp4（无 acrossfade，按顺序 concat 3 段）
+
+ffprobe 验证：
+  streams[0] video: h264 High profile, 1920x1080 yuv420p 24fps, bit_rate 2.80 Mb/s
+  streams[1] audio: aac LC 32kHz stereo, bit_rate 128 kb/s
+  format duration: 15.542s（≈3×5.167，与 storyboard 3×5s 略有差异是原 shot 时长）
+
+抽帧验证（6/6 PASS，报告 verify\verify_report.json）：
+
+| 时刻       | 标签              | 像素证据                                                              | pass |
+|------------|-------------------|-----------------------------------------------------------------------|------|
+| 1.50s      | title_card        | 暗背景 94.6% + accent 35 个橙色像素 + 2.4% 亮像素                     | ✅   |
+| 4.50s      | shot01_subtitle  | 底部 bar 暗 91.3% + 白字 3.4%                                        | ✅   |
+| 7.50s      | shot02_subtitle  | 底部 bar 暗 89.5% + 白字 3.2%                                        | ✅   |
+| 10.50s     | shot03_subtitle  | 底部 bar 暗 90.4% + 白字 4.5%                                        | ✅   |
+| 15.34s     | end_card         | 暗背景 98.0% + 1.5% 亮像素                                            | ✅   |
+| 7.77s      | plain_mid        | 普通视频帧分布                                                        | ✅   |
+
+产物：
+- D:\ai-video-pipeline\output\out\video_with_overlay_full.mp4  (5,712,935 bytes)
+- D:\ai-video-pipeline\output\out\video_with_overlay_full.concat.mp4 (中间拼接产物)
+- D:\ai-video-pipeline\output\out\video_with_overlay_full.mp4.meta.json
+- D:\ai-video-pipeline\output\out\video_with_overlay_full.mp4.verify\
+    verify_report.json + 6 张 *.jpg 抽帧
+
+
+实测 3：--no-audio 旁路
+----------------------
+命令：
+    python scripts\compose_final.py ^
+        --storyboard examples\sample_storyboard.json ^
+        --video output\out\video_silent_v5.mp4 ^
+        --out output\out\video_with_overlay_noaudio.mp4 ^
+        --overlays-dir output\overlays_e2e --no-audio
+
+ffprobe 验证：format duration 15.500s，仅 1 个 stream (video h264 High 1920x1080 yuv420p 24fps)，
+无音频流。抽帧 6/6 PASS。
+
+产物：D:\ai-video-pipeline\output\out\video_with_overlay_noaudio.mp4 (5,398,674 bytes)
+
+
+audio 阶段衔接步骤（不要求改 p5_v5_audio.py）
+-----------------------------------
+现状：scripts\p5_v5_audio.py 把 video_silent_v5.mp4 当 VIDEO_SILENT，-map 3:v copy 视频流，
+输出 final_v5.mp4；音频单独合 narration+ambient+piano，再 amix 进 [aout]。
+该方案不烧 overlay，字幕/标题/片尾不会出现在成片里。
+
+Phase C 衔接方案：
+
+1) VIDEO_SILENT 改为 compose_final 产物
+   - 复制 scripts\p5_v5_audio.py 一份（例如 scripts\p5_v6_audio.py），把
+       VIDEO_SILENT = OUT / "video_silent_v5.mp4"
+     改成
+       VIDEO_SILENT = OUT / "video_with_overlay.mp4"
+     （与 compose_final.py 的 --out 对齐；建议保持 v6 命名体系，不动 p5_v5_audio.py）
+
+2) 不改 [aout] 混音链路
+   - video_with_overlay.mp4 的音频 = video_silent_v5.mp4 的音频 = shot1+shot2+shot3 acrossfade。
+   - p5_v5_audio.py 用 -map 3:v copy 视频流（含 overlay），用 -map [aout] 替换音频；逻辑不变。
+   - 配音 / 钢琴 / 底噪的 timing 与原 v5 完全一致（narration.adelay 与 piano_start 都按 v5
+     video_silent 的总时长算，与 overlay 烧录后的总时长相同 → 衔接零漂移）。
+
+3) end-to-end 调用顺序
+   a)  python scripts\render_overlays.py examples\sample_storyboard.json --out output\overlays_e2e --demo
+       （如已渲过可跳过；compose_final 也会自动补）
+   b)  python scripts\compose_final.py ^
+           --storyboard examples\sample_storyboard.json ^
+           --video output\out\video_silent_v5.mp4 ^
+           --out output\out\video_with_overlay.mp4 ^
+           --overlays-dir output\overlays_e2e
+   c)  python scripts\p5_v6_audio.py  (或 v5_audio 改 VIDEO_SILENT 路径后跑 v5)
+       → final.mp4 真正带「片头标题卡 + 三段字幕条 + 片尾卡 + 配音 + BGM + 底噪」
+
+4) 若用 --videos 走 3-shot 直拼路径（产物时长 15.54s，比 v5_concat 的 15.5s 略长），
+   则需要在 p5_v6_audio.py 里把 ffprobe_duration 拿到的 VIDEO_SILENT 时长用于 piano_start
+   / shot3_start；现有 p5_v5_audio.py 已用 duration 算 timing（shot3_start = 10 if duration <= 12
+   else round(duration*2/3, 2); piano_start = duration - piano_dur），所以只需要 VIDEO_SILENT
+   路径换一下，其余不动 → 配音与 BGM 仍按当前 shot 边界对齐；片头 [0,4] / 片尾 [11.54,15.54]
+   与配音的 narration.adelay=10000ms / piano_start=11.542s 完全吻合。
+
+5) 可选：audio 阶段复用现有 p5_v5_audio.py 但改路径（最小改动）
+       把文件复制成 p5_v6_audio.py 或在 p5_v5_audio.py 顶部加：
+         VIDEO_SILENT = OUT / "video_with_overlay.mp4"  # override
+       注意：p5_v5_audio.py 顶部常量按字面读，重命名/新文件更安全；本期按"复制一份 v6"处理
+       不修改原 p5_v5_audio.py（符合硬约束）。
+
+最终成片时长预期：
+- 单段视频（video_silent_v5 路径）：15.5s
+- 多段拼接（--videos 路径）：~15.54s
+与 video_with_overlay_simplified / video_with_overlay_full 实测一致 → audio 阶段可直接复用
+现有 p5_v5_audio.py 的 timing 公式，无缝衔接。
+
+
+已知限制 / 后续可改
+-------------------
+- 输出分辨率固定 1920x1080（与 overlay 画布一致）；主视频是 1344x768 时会上下黑边 letterbox。
+  想要 stretch 或 1080p full-bleed 可加 --scale-mode stretch（未实现；当前是 contain 模式）。
+- subtitle-bar 在 title-card 覆盖区（[0,4]）和 end-card 覆盖区（[end_dur, video_dur]）会被全屏
+  overlay 盖住；如果想保留 shot1 前段字幕，可调小 title-card duration 或把 title-card 提前出。
+  这是默认预期行为，本期未做差异化策略。
+- --videos 多段拼接没加 acrossfade（与 p5_v5_concat.py 不同）；想要 acrossfade 请先调
+  p5_v5_concat.py 产 video_silent 后走 --video 路径，或在 compose_final 里复用 concat 滤镜
+  （本期不动 p5_v5_concat.py）。
+- sample_storyboard.json 没 overlay 字段；本任务在 compose_final 里 auto-overlay 注入 demo，
+  与 render_overlays.build_demo_storyboard 一致；生产场景应让上游（narrative-designer / overlay
+  阶段 agent）把 overlay 字段写到 storyboard，compose_final 即可直接消费现有字段，无需注入。
+- verify 的"plain_mid"在 subtitle 全程覆盖时只能落到 subtitle 区里，目前是参考性 pass
+  （没有强制判定）；非覆盖完整视频的话（比如 title 只 2s 且末段无 subtitle）可作为"主视频原画"
+  验证锚点。
+- verify 仅做关键帧抽样（6 帧），不做全帧扫描；如果担心字幕条被偶然遮挡，可以扩展成对每个
+  shot 的所有字幕时间窗做更密集抽样（成本上增加 ~30 帧，~30s），本期不做。
+- 没动 audio 阶段的脚本，按硬约束保留 p5_v5_audio.py 原状；audio 衔接通过复制为 v6 实现，
+  最小侵入。
+
+硬约束遵守
+----------
+✓ 纯 Python + subprocess + ffmpeg + PIL（import 列表：argparse, json, os, shutil, subprocess,
+  sys, time, pathlib, typing.Iterable, PIL.Image）
+✓ scripts\filmstrip.py、scripts\r2v_review.py 未触碰
+✓ scripts\overlay.py、scripts\render_overlays.py、overlays\*.html 未触碰
+✓ pipeline.yaml 未修改
+✓ 没 git init / 没改 git config / 没 push
+✓ 所有读写都在 D:\ai-video-pipeline 内
