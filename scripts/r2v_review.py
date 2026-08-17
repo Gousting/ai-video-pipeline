@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import filmstrip as _fs  # noqa: E402  （提供 filmstrip() / filmstrip_b64()）
 
 API_URL = "https://opencode.ai/zen/go/v1/chat/completions"
-API_KEY = "sk-RoSmCwFjehQiKaliD9TzgLrgXnoOiVlSoIvqOckrRpclpVVoo5L7r3AL1AcmM3ni"
+API_KEY = "sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr"
 MODEL = "minimax-m3"
 
 

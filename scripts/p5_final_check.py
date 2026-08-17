@@ -19,7 +19,7 @@ FRAME = ROOT / "output" / "tmp" / "final_frame.jpg"
 OUTJSON = ROOT / "output" / "tmp" / "p5_final_frame_check.json"
 
 API_URL = "https://opencode.ai/zen/go/v1/chat/completions"
-API_KEY = "sk-RoSmCwFjehQiKaliD9TzgLrgXnoOiVlSoIvqOckrRpclpVVoo5L7r3AL1AcmM3ni"
+API_KEY = "sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr"
 MODEL = "qwen3.8-max"
 
 
