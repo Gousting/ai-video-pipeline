@@ -1,0 +1,94 @@
+<!--
+  overlays/end-card.html — 片尾卡
+  ----------------------------------------------------------------
+  HyperFrames HTML 模板。需 `hyperframes` CLI。
+
+  data 字段：
+    {{title}}      主标题（必填），通常为片名。例：「城市最后一班电车」
+    {{credit}}     落版权或鸣谢文字（可选）。例：「本片由 AI 辅助生成」
+    {{tagline}}    底部装饰小字（可选）。例：「END · 晚安」
+    __DURATION__   时长（秒），建议 >= 3。
+    __WIDTH__ / __HEIGHT__  画布尺寸，自动写入。
+
+  怎么改样式：
+    - 整体氛围：改 .stage 的 background 渐变。
+    - 字号 / 字色：调整 .title / .credit / .tagline。
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>{{title}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: __WIDTH__px;
+        height: __HEIGHT__px;
+        overflow: hidden;
+        background: #050505;
+        font-family: "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: #f5f5f5;
+      }
+      .stage {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background:
+          radial-gradient(ellipse at 50% 50%, rgba(255, 179, 90, 0.12), transparent 60%),
+          linear-gradient(180deg, #050505 0%, #141414 100%);
+      }
+      .title {
+        font-size: 96px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        opacity: 0;
+        transform: scale(0.96);
+      }
+      .credit {
+        margin-top: 28px;
+        font-size: 26px;
+        color: #bdbdbd;
+        opacity: 0;
+      }
+      .tagline {
+        position: absolute;
+        bottom: 8%;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 20px;
+        color: #777;
+        letter-spacing: 0.6em;
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      class="stage"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="__DURATION__"
+      data-width="__WIDTH__"
+      data-height="__HEIGHT__"
+    >
+      <h1 class="title">{{title}}</h1>
+      <div class="credit">{{credit}}</div>
+    </div>
+    <div class="tagline">{{tagline}}</div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      tl.to(".title", { opacity: 1, scale: 1, duration: 0.9, ease: "power3.out" }, 0.2)
+        .to(".credit", { opacity: 1, duration: 0.6, ease: "power2.out" }, 0.7)
+        .to(".tagline", { opacity: 1, duration: 0.6, ease: "power2.out" }, 1.5);
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

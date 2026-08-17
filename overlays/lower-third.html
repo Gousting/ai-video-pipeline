@@ -1,0 +1,96 @@
+<!--
+  overlays/lower-third.html — 人名 / 注释条（左下角）
+  ----------------------------------------------------------------
+  HyperFrames HTML 模板。需 `hyperframes` CLI。
+
+  data 字段：
+    {{name}}       主标题（必填），通常为人名。例：「阿澈」
+    {{caption}}    副标题（可选），人名注释或身份。例：「旁白者 · 二十岁」
+    __DURATION__   显示时长（秒）。
+    __WIDTH__ / __HEIGHT__  画布尺寸，自动写入。
+
+  怎么改样式：
+    - 颜色：.accent 强调条（左侧橙色细条）和 .caption 字色。
+    - 位置：.block 的 bottom / left 偏移。
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>{{name}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: __WIDTH__px;
+        height: __HEIGHT__px;
+        overflow: hidden;
+        background: transparent;
+        font-family: "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .stage { position: absolute; inset: 0; }
+      .block {
+        position: absolute;
+        left: 6%;
+        bottom: 12%;
+        padding: 18px 28px 18px 36px;
+        background: rgba(0, 0, 0, 0.65);
+        border-radius: 4px;
+        display: flex;
+        align-items: stretch;
+        gap: 22px;
+        opacity: 0;
+        transform: translateX(-30px);
+      }
+      .accent {
+        width: 6px;
+        background: #ffb35a;
+        border-radius: 3px;
+      }
+      .text-col {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .name {
+        color: #ffffff;
+        font-size: 44px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .caption {
+        color: #d8d8d8;
+        font-size: 22px;
+        margin-top: 6px;
+        letter-spacing: 0.1em;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      class="stage"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="__DURATION__"
+      data-width="__WIDTH__"
+      data-height="__HEIGHT__"
+    >
+      <div class="block">
+        <div class="accent"></div>
+        <div class="text-col">
+          <div class="name">{{name}}</div>
+          <div class="caption">{{caption}}</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      tl.to(".block", { opacity: 1, x: 0, duration: 0.5, ease: "power3.out" }, 0.15);
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

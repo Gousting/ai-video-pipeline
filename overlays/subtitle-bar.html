@@ -1,0 +1,85 @@
+<!--
+  overlays/subtitle-bar.html — 底部字幕条
+  ----------------------------------------------------------------
+  HyperFrames HTML 模板。需 `hyperframes` CLI。
+
+  data 字段：
+    {{text}}       字幕文本（必填）。会换行，居中显示。
+    __DURATION__   显示时长（秒）。建议 >= 镜头时长。
+    __WIDTH__      画布宽（默认 1920），自动写入。
+    __HEIGHT__     画布高（默认 1080），自动写入。
+
+  怎么改样式：
+    - 黑底高度：.bar 的 height（默认 18% 画布高）。
+    - 透明度：.bar 的 background 颜色（最后一个 alpha 通道，170 ≈ 65%）。
+    - 字号：.bar 的 font-size（默认 48px）。
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>{{text}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: __WIDTH__px;
+        height: __HEIGHT__px;
+        overflow: hidden;
+        background: transparent;
+        font-family: "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .stage {
+        position: absolute;
+        inset: 0;
+      }
+      .bar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 18%;
+        background: rgba(0, 0, 0, 0.65);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 0 6%;
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      .text {
+        color: #ffffff;
+        font-size: 48px;
+        font-weight: 500;
+        line-height: 1.5;
+        text-align: center;
+        letter-spacing: 0.05em;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      class="stage"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="__DURATION__"
+      data-width="__WIDTH__"
+      data-height="__HEIGHT__"
+    >
+      <div class="bar">
+        <div class="text">{{text}}</div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      tl.to(".bar", { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 0.1)
+        .to({}, { duration: 0.1 });  // hold
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

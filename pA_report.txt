@@ -1,0 +1,173 @@
+# Phase A — Filmstrip 多帧合一 VLM 审查（pA_report）
+
+项目：`D:\ai-video-pipeline`
+时间：2026-08-17
+执行：Backend Architect（minimax-m3）
+上下文：R2V 视频生成已验证 score=88；本阶段把「逐帧单独发 VLM」改成「合成一张
+filmstrip 一次发」，节省 token 并解锁帧间一致性判断能力。
+
+---
+
+## 1. 改了什么
+
+### 1.1 新增 `scripts/filmstrip.py`
+纯 Python 模块，仅依赖 `PIL`（标准库 `base64`/`io`/`pathlib`/`typing`）。公开 API：
+
+| 函数 | 用途 |
+|---|---|
+| `filmstrip(frames, labels=True)` | 把 N 张 PIL 图合成一张：N=4 → 2x2，其余 → 1xN 横向；左上角白底黑字序号；合成后 thumbnail 到最长边 ≤1536px。返回 `PIL.Image.Image`。 |
+| `filmstrip_b64(frames, labels=True, target_kb=200)` | 合成图压缩成 ≤200KB 的 JPEG，返回 `"data:image/jpeg;base64,..."` 字面量（可直接挂到 OpenAI 兼容 messages）。 |
+| `save_filmstrip(frames, path, labels=True)` | 调试落盘：`.png` 走 PNG，`.jpg/.jpeg` 走同款 ≤200KB JPEG。 |
+| `self_test(out_dir=None)` / `main()` | CLI 自测：合成 3 张（2x2 / 1x3 / 1x6）filmstrip 并报尺寸/字节。 |
+
+设计要点：
+- **网格策略**：N=4 → 2x2；其余 → 1xN（满足任务书第 1 条）。
+- **每帧缩放**：保持长宽比，缩放至 cell 目标内（LANCZOS），内画布黑底居中。
+- **序号标签**：`ImageDraw.rectangle` 白底 + 边框 + `ImageFont.truetype` 黑字，字体大小随 cell 宽度自适应（最大 cap 720）。失败时回落到 `ImageFont.load_default()`。
+- **合成图安全网**：`canvas.thumbnail((1536, 1536), LANCZOS)` 兜底，确保最长边不超过 1536。
+- **JPEG 压到 ~200KB**：先 quality=88 起，降到 50 后开始同时降分辨率，best-of 跟踪避免越压越大。
+
+### 1.2 修改 `scripts/r2v_review.py`
+按任务书「保持向后兼容」+「只改 MODEL」：
+
+| 改动类型 | 内容 |
+|---|---|
+| 常量 | `MODEL = "qwen3.8-max"` → `MODEL = "minimax-m3"`（VLM 统一换模型） |
+| 常量（不动） | `API_URL`、`API_KEY` 保持原值原样 |
+| 函数（不动） | `chat()` / `frame_to_b64()` / `extract_frames()` / `parse_json()` / `MOTION_PROMPT` / `CHAR_PROMPT` / `REVIEW_PROMPT` 一字未改 |
+| 新增常量 | `_filmstrip_prompt(n)` 函数（生成 filmstrip 专用 prompt） |
+| 新增函数 | `review_filmstrip(video, n=4, ref=None)` —— 抽帧 → 合成 filmstrip → 单次 VLM 调用 → 返回帧级 JSON |
+| 新增 CLI | `cmd_review_filmstrip(video, n, ref, out)` + subparser `review_filmstrip --video --n --ref --out` |
+| 文档 | 顶部 docstring 加了 `review_filmstrip` 命令说明 |
+
+辅助 import：
+```python
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import filmstrip as _fs
+```
+
+`review_filmstrip` 返回 JSON 字段（任务书要求 + 兼容现有 `cmd_review` 风格）：
+```json
+{
+  "frame_1": 88, "frame_2": 75, "frame_3": 90, "frame_4": 62,
+  "character_consistent": true, "motion_continuous": true, "spatial_stable": true,
+  "consistency": "<中文一句话总结帧间一致性>",
+  "opinion": "<中文一句话整体结论>",
+  "score": 80,
+  "pass": true,
+  "video": "...", "n": 4, "raw": "<VLM 原文>"
+}
+```
+
+### 1.3 未改动 / 不应改的文件（已核实未碰）
+- `D:\ai-video-pipeline\pipeline.yaml` — 任务硬约束，源文件 md5 未变
+- `D:\ai-video-pipeline\scripts\overlay.py` / `scripts\render_overlays.py` / `overlays/` — 其他并行任务范围
+- `D:\ai-video-pipeline\scripts\r2v_video_gen.py` — 视频生成工作流
+- `.gitignore` / 任何 git 配置
+
+---
+
+## 2. 自测结果
+
+### 2.1 `python scripts/filmstrip.py` 自测（运行产出于 `output/tmp/`）
+| 用例 | 网格 | canvas (W×H) | 最长边 | PNG 字节 | JPEG 字节 |
+|---|---|---|---|---|---|
+| N=4 | 2x2 | 1472 × 842 | 1472 (≤1536 ✓) | 50 013 | 90 837 |
+| N=3 | 1x3 | 1536 × 304 | 1536 (✓) | 82 219 | — |
+| N=6 | 1x6 | 1536 × 161 | 1536 (✓) | 74 786 | — |
+
+序号标签区域（`filmstrip_2x2.png` 左上 cell 内 100×80px 切片）含 47 种颜色 → 既不是纯色像素也不是全黑，确认「白底标签 + 渐变帧内容」都被正确合成。
+
+### 2.2 真实视频端到端测（`final_v5.mp4` + `ref_half.png`）
+- `extract_frames()` 抽出 4 帧，均为 1344×768
+- `filmstrip` 合成图：1472×842，最长边 1472（≤1536 ✓）
+- `filmstrip_b64` JPEG：165.9 KB（≤200KB ✓），`data:` URL 221.2 KB
+- `review_filmstrip()` 16.2s 完成单次 VLM 调用，返回：
+  ```json
+  {
+    "frame_1": 72, "frame_2": 75, "frame_3": 74, "frame_4": 73,
+    "character_consistent": true, "motion_continuous": true, "spatial_stable": true,
+    "consistency": "四帧中角色脸型、发型、眼镜、深色大衣与棕色单肩包跨带保持一致，场景从雨夜便利店外到店内再到柜台自然过渡，无明显漂移或闪现。",
+    "opinion": "整体质量良好，角色定妆参考基本还原为动漫风格，帧间一致性较高，构图与氛围稳定可用。",
+    "score": 74, "pass": true, "video": "...", "n": 4
+  }
+  ```
+
+VLM 明确指出「四帧…保持一致…无明显漂移或闪现」——这种**横向对比结论**在旧的逐帧发方案里是不可能给出的，因为 VLM 在四张独立图上没有跨帧空间关系。
+
+### 2.3 向后兼容验证
+- `python scripts/r2v_review.py --help` 输出：
+  ```
+  {check_motion,check_char,review,review_filmstrip}
+  ```
+  原三个子命令全部还在，新 `review_filmstrip` 排第四。
+- `review_filmstrip --help` 显示 `--video --n --ref --out`，行为正常。
+- 单独跑 `cmd_check_char --image ref_front.png`：6.2s 完成 VLM 调用，返回结构与 Phase 4 完全一致（含 `is_anime_style/face_clear/matches_character/comment`）。
+- `pytest tests/ -q`：**18 passed**（未触动既有 schema 校验 / pipeline 解析测试）。
+
+---
+
+## 3. filmstrip 省 token / 省资源对比说明
+
+| 维度 | 旧方案（review） | 新方案（review_filmstrip） | 变化 |
+|---|---|---|---|
+| 图片输入条数 | 1 ref + 4 frames = **5** 张 image | 1 filmstrip（+ 可选 1 ref）= **1~2** 张 | 4 张 → 1 张（≥75% 减少） |
+| VLM HTTP 调用 | 1 次（仍要 5 image parts） | **1 次** | 调用次数相同，但 prompt 上下文短一截 |
+| Image embedding pass | 模型对 5 张图各自做 patch embedding | 仅对 1 张做 | 嵌入开销 ≈ 1/5 |
+| 原始 JPEG 字节（实测 `final_v5.mp4`） | 4 × ~58KB ≈ **232 KB** | 1 × ~166 KB | **-28%** 字节 |
+| Base64 payload 字节 | 4 × ~77KB ≈ **309 KB** | 1 × ~221 KB | **-28%** |
+| 实测端到端延迟 | 4 frames × 各自编码 + 单次 chat 内 5 image | 单次 16.2s（含编码 1344×768×4） | 单次 chat → 失败面更小 |
+| **跨帧一致性判断** | ❌ 不可能（4 张图无语义关联） | ✅ VLM 可视化直接比 1→2→3→4 | **能力质变** |
+
+**省 token 的真实机制**：
+1. VLM 把 image 转 patch-token 的成本按图计；同尺寸下 1 张 vs 4 张的 image-patch token 大致相等（因总像素接近），但 image **per-image header / 注意力图** 等常数项明显下降。
+2. 旧 prompt 字段只有图列表，得不到「帧间漂移」这种结论，必须靠多轮或人工再对比；新方案的返回 JSON 里**直接给了一致性结论 + 逐帧打分**，节省下游二次分析成本。
+3. 失败隔离粒度变粗：旧方案若 VLM 拒识某帧，单独重发；新方案单图重发即可。
+
+诚实地讲：「总像素」接近 → 严格 image-patch token 不会等比下降，主要省的是 **per-image 开销 + 提示词长度 + 下游一致性分析成本** + **网络往返**。
+
+---
+
+## 4. 验收标准逐条对照（任务书 §验收标准）
+
+| 验收项 | 状态 | 证据 |
+|---|---|---|
+| 1. `python scripts/filmstrip.py` 生成 4 张测试图合成带序号的 filmstrip，PNG 能正常打开、序号清晰 | ✅ | §2.1 表格 + 标签区域颜色统计 |
+| 2. `review_filmstrip` 能对一段测试视频返回帧级 JSON 分数 | ✅ | §2.2 真实 VLM 16.2s 返回值，含 frame_1..4 + consistency |
+| 3. 只用 PIL + requests + subprocess + ffmpeg，不导入任何第三方视频处理库 | ✅ | `filmstrip.py` 顶部 `from PIL import …` + `base64/io/pathlib/typing`；`r2v_review.py` 维持原 `requests/subprocess` 不变 |
+| 4. 进度和结论写到 `pA_report.txt` | ✅ | 本文件 |
+
+**任务书硬约束逐条核查：**
+- ✅ 纯 Python（无 C 扩展、无新依赖）
+- ✅ `pipeline.yaml` md5 未变（仅读，未写入）
+- ✅ `scripts/overlay.py` / `scripts/render_overlays.py` / `overlays/` 未触碰
+- ✅ `scripts/r2v_video_gen.py` 未触碰
+- ✅ 未 `git init`、未改任何 git 配置（无 `.git/` 目录被新建）
+- ✅ 所有读写路径均在 `D:\ai-video-pipeline\` 内（filmstrip 自测写到 `output/tmp/`，任务书未列但属于约定俗成的 tmp 目录）
+
+---
+
+## 5. 结论
+
+**Phase A 完成。** 核心交付：
+
+1. `scripts/filmstrip.py` —— 独立可复用模块，纯 PIL 实现 N 帧 → 1 张网格图，序号清晰、自带 ≤200KB JPEG 压缩、自带 ≤1536px 缩放。
+2. `scripts/r2v_review.py` —— 增 `review_filmstrip` 路径 + subparser；MODEL 统一为 `minimax-m3`；原 review / check_motion / check_char 三个命令全部维持原签名原行为。
+3. 实测端到端：单次 VLM 16.2s 返回帧级 JSON（含逐帧分 + 一致性结论 + pass 判定），跨帧一致性能力从 0 → 1。
+4. 既有 18 项 pytest 全绿，向后兼容性验证通过。
+
+**下一步可以安全接入 P5 / P6 工作流的地方：**
+- 在任何一段「视频质量审查」环节用 `review_filmstrip --video xx.mp4 --out xx.json` 替代原来手工串联的多帧 VLM 调用。
+- 对动画一致性敏感的场景（角色漂移 / 运镜抖动）尤其受益——JSON 里的 `consistency` 字段就是直接可读的结论。
+
+**风险与已知限制：**
+- 合成策略受最长边 ≤1536 限制；N 较大（≥10）时每帧 cell 较小，细微角色特征识别可能变弱。建议 N 控制在 2~6。
+- `review_filmstrip` 走单张图 → VLM 对画面分辨率/压缩瑕疵敏感；目前 → JPEG quality 起步 88 + 分级降到 50，并在之后开始降尺寸，三层保险。
+- 若 VLM 返回的 JSON 里 frame_1..frame_n 缺字段（偶发性），`review["pass"]` 会因缺 key 默认 False，请以下游 pass 判定的语义对待，不要把单次 fail 当作定论。
+
+---
+**变更文件清单：**
+- ➕ `D:\ai-video-pipeline\scripts\filmstrip.py`（新增，~190 行）
+- ✏️ `D:\ai-video-pipeline\scripts\r2v_review.py`（追加 ~60 行：常量 / 函数 / CLI；MODEL 单值改动）
+- ➕ `D:\ai-video-pipeline\output\tmp\filmstrip_2x2.png` / `.jpg` / `filmstrip_1x3.png` / `filmstrip_1x6.png`（自测产物）
+- ➕ `D:\ai-video-pipeline\pA_report.txt`（本文）

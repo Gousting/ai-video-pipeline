@@ -1,0 +1,179 @@
+Phase B · Overlay 包装层 自测报告
+=================================================
+
+执行环境
+--------
+- OS: Windows 11 (win32 PowerShell 5.1)
+- 工作目录: D:\ai-video-pipeline
+- Python: 3.13.9 (Pillow 12.0.0 / PyYAML 6.0.3 / jsonschema 已装)
+- Node.js: 25.8.1 (npx 11.11.0, 路径 C:\nvm4w\nodejs\npx.cmd)
+- ffmpeg / ffprobe: Gyan.FFmpeg 8.1.2 via winget
+- HyperFrames: 0.7.109 (从 npm 拉取)，Chrome for Testing 152.0.7928.2 (headless-shell) 由 hyperframes browser ensure 安装
+
+
+新增 / 修改文件
+--------------
+新增：
+  scripts\overlay.py              OverlayProvider Protocol + PilProvider + HyperFramesProvider + RemotionProvider
+  scripts\render_overlays.py      storyboard → overlay provider 编排 / 兜底 / manifest
+  overlays\title-card.html        片头标题卡模板（GSAP + CSS 动画）
+  overlays\subtitle-bar.html      底部字幕条模板
+  overlays\lower-third.html       人名 / 注释条模板
+  overlays\end-card.html          片尾卡模板
+  overlays\transition.html        镜头转场模板（wipe + label）
+  tests\test_overlay.py           overlay provider + render_overlays 测试（16 例）
+
+修改：
+  pipeline.yaml                   加 overlay 阶段（7 个环节；video 之后 / audio 之前），
+                                  artifacts.layout 加 overlays/，
+                                  默认 engine=pil 并支持 hyperframes/remotion
+  tests\test_pipeline.py          6 → 7 阶段断言，并强制 overlay 位于 video 之后 / audio 之前
+
+未触碰（按硬约束）：
+  scripts\filmstrip.py、scripts\r2v_review.py、scripts\r2v_video_gen.py、
+  scripts\p5_*.py（git diff 已确认；scripts/r2v_review.py 由并行任务修改，与本任务无关）
+
+
+OverlayProvider 设计
+--------------------
+定义在 scripts\overlay.py，统一接口：
+  - id: str             provider 标识
+  - render(composition, data, out) -> Path
+    composition: Mapping[str, object]  至少 width / height（HyperFrames 还要 duration / fps）
+    data:        Mapping[str, object]  模板占位符 + provider 参数（如 quality / timeout_s）
+    out:         Path                   输出文件（PNG / MP4）
+Protocol 用 typing.Protocol；registry 函数 get_provider(engine) 做 (pil|hyperframes|remotion) 路由。
+
+三种 provider：
+  PilProvider           Pillow 画半透明黑底字幕条 → PNG，含字体自动回退（中英字体都没装也能跑）
+                       DEFAULT：1920x1080、底部 18% 黑底、48px 字号、白色文字居中。
+                       可在 data 里覆盖 font_size / bar_ratio / text_color / bg_color / font_path 等。
+  HyperFramesProvider   subprocess 调 `npx --yes hyperframes render`，
+                       流程：临时目录 → init blank → 覆写 index.html（占位符替换）→ render。
+                       占位符：
+                         {{key}}             ← 文字内容（标题、副标题、字幕正文等）
+                         data-*="__KEY__"   ← 同时也认
+                         __WIDTH__ / __HEIGHT__ / __DURATION__  ← 画布与时长，由 render 自动注入
+                       兜底 init：在 npx 拉不到包时手工写最小 index.html + hyperframes.json + package.json。
+  RemotionProvider      NotImplementedError 占位，留给将来的数据驱动视频接入。
+
+
+storyboard overlay 字段 schema
+------------------------------
+顶层 overlays[]（片头 / 片尾 / 整片转场）：
+  { "id": "title-card", "engine": "hyperframes", "template": "title-card",
+    "data": {"title": "...", "subtitle": "...", "tagline": "..."},
+    "duration": 4.0 }
+
+每个 shot.overlay（per-shot，字幕条 / 人名条）：
+  { "engine": "pil", "template": "subtitle-bar",
+    "data": {"text": "这座城市睡着以后..."} }
+
+CLI：
+  python scripts\render_overlays.py examples\sample_storyboard.json
+  python scripts\render_overlays.py examples\sample_storyboard.json --demo
+  python scripts\render_overlays.py examples\sample_storyboard.json --out D:\foo\bar
+
+demo storyboard 自动叠三层 overlay：
+  1) title-card（HyperFrames 渲染 4s MP4）
+  2) 每个有 narration 的 shot → subtitle-bar（PIL 渲染 PNG）
+  3) end-card（HyperFrames 渲染 4s MP4）
+
+兜底策略：HyperFrames 渲染失败时自动用 PIL provider 再渲一次 PNG，并在 manifest 里
+记 status="fallback_ok"、note 说明原因。默认 fallback-engine=pil。
+
+
+Self-test 结果
+--------------
+A) HyperFrames 可用性探测：
+   HyperFramesProvider().is_available() →
+       (True, 'npx 可用: 11.11.0 (cmd=C:\\nvm4w\\nodejs\\npx.cmd)')
+
+B) CLI 自测：
+   1) python scripts\overlay.py pil "..." out.png
+        → 输出 D:\ai-video-pipeline\output\overlays\selftest_subtitle.png
+          1920x1080 RGBA / 27 KB / PNG 头正常
+   2) python scripts\overlay.py hyperframes title-card out.mp4
+        → 输出 D:\ai-video-pipeline\output\overlays\selftest_titlecard.mp4
+          1280x720 24fps 3s H.264 / 119 KB（ffprobe 校验：nb_frames=72 / duration=3.0）
+
+C) 五个模板逐个渲染（HyperFrames，854x480, 12fps, 1s, draft）：
+   title-card    ✓ 119 KB
+   subtitle-bar  ✓ 12 KB
+   lower-third   ✓ 19 KB
+   end-card      ✓ 在 e2e run 里渲了 156 KB
+   transition    ✓ 16 KB
+
+D) 像素抽样校验（确认 overlay 是真的渲染了视觉内容）：
+   subtitle-bar PIL：
+     - 字幕区中线 alpha=170(65% 黑), RGB=(0,0,0)         ✓ 半透明黑底
+     - 字幕区外 alpha=0 完全透明                        ✓ 全画面只在底部有黑底
+     - 字幕区白色像素 176 个                             ✓ 文字已绘制
+   title-card HyperFrames @1.0s：
+     - 标题区白色像素 211 个，亮度梯度有明显衬度         ✓ 标题文本已上画
+     - 背景 #050505 暗色渐变 + #ffb35a 橙色 accent        ✓ 配色命中模板
+
+E) 端到端 (--demo)：
+   python scripts/render_overlays.py examples/sample_storyboard.json --demo --out output\overlays_e2e
+     总数 5 | 成功 5 | 兜底 0
+     - title-card.mp4        (HyperFrames, 4s, 1920x1080)
+     - end-card.mp4          (HyperFrames, 4s, 1920x1080)
+     - shot-01-subtitle-bar.png (PIL, 单帧 PNG, 1920x1080)
+     - shot-02-subtitle-bar.png (PIL, 单帧 PNG, 1920x1080)
+     - shot-03-subtitle-bar.png (PIL, 单帧 PNG, 1920x1080)
+     manifest.json 同步写出 (storyboard_title / composition / overlays[] / summary)
+
+F) 兜底链路验证（注入一个会失败的 FakeHF）：
+   - storyboard 带 overlays: [title-card(HF)]
+   - FakeHF.render 抛 RuntimeError('hyperframes unavailable (simulated)')
+   - render_overlays 自动降级到 pil：
+     status='fallback_ok', fallback_engine='pil', note='HyperFrames 不可用，已降级到 pil'
+     输出：shot-XX-subtitle-bar.png 仍是 27 KB 有效 PNG
+
+G) 测试套件：
+   $ python -m pytest tests/
+   ============================ 34 passed in 0.57s ============================
+   其中 test_overlay.py 16 例覆盖：
+     provider 路由、Remotion 占位、PIL PNG 输出、强制 png 扩展、空 text 报错、
+     HyperFrames 占位符替换（不真跑 npx）、模板不存在报错、
+     render_overlays 跳过无 overlay 的 shot、批量 PIL、HyperFrames 失败 → PIL 兜底、
+     manifest 写入、default_text_for_template 五个分支、build_demo_storyboard 增量、
+     pipeline.yaml overlay 阶段位置 + default_engine=pil
+   test_pipeline.py 8 例 / test_schema.py 10 例全部沿用原有覆盖，断言已对齐 7 阶段。
+
+H) pipeline.yaml 校验：
+   $ python scripts/parse_pipeline.py
+   校验通过: ai-video v0.1（7 个阶段，全部含 gate）
+     - video → overlay → audio 顺序保持一致
+     - 阶段交接一致：overlay 的 input (storyboard.json + clips/) 已被前置环节覆盖，
+                     audio 多加了 overlays/ 输入也对齐到新增的 output
+     - artifacts.layout 新增 overlays: overlays/
+
+
+HyperFrames 在本机是否可用
+--------------------------
+结论：可用。
+
+- npx 检测：C:\nvm4w\nodejs\npx.cmd --version = 11.11.0（Windows 上 npx 是
+  shim，无 .exe 后缀；provider 已自动 _find_npx() 改用 npx.cmd）
+- hyperframes 包：v0.7.109（npm registry, Apache-2.0, HeyGen-Com 维护）
+- Chrome 浏览器：v152.0.7928.2（hyperframes browser ensure 自动从 Google
+  Chrome for Testing CDN 下载到 %USERPROFILE%\.cache\hyperframes\chrome）
+
+注意事项：
+- 首次 render 之前需先 `npx --yes hyperframes browser ensure`，本机已执行。
+- Windows 上 `npx --yes hyperframes` 子进程 stderr 是 GBK/CP936 字节流；provider
+  decode 时用 errors='replace'，避免 UnicodeDecodeError 吃掉错误信息。
+- 单次 render 超时默认 600s（draft quality），实测 1s 854x480 字幕约 17s，
+  4s 1920x1080 title-card 约 35s（含冷启动 Chrome）。CI / orchestration 可
+  在 data 里覆盖 timeout_s。
+- 不可用兜底：render_overlays 默认 fallback-engine=pil；当 is_available=False
+  或 render 抛错时自动降级为 PIL PNG，并在 manifest 同步记 status/note。
+
+
+下一步（不在 Phase B 范围）
+---------------------------
+- audio 阶段接入 output\overlays_e2e\*.png/*.mp4（ffmpeg overlay filter 烧到 final.mp4）。
+- Remotion provider 接入（React 生态 + 数据驱动视频）。
+- 引入更多 HyperFrames 模板（信息图表、双行字幕、渐隐字幕条、画中画等）。
+- 给 overlay 阶段写专门的 VLM 评审 gate，检查烧录位置 / 不挡主体 / 文字清晰度。

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""R2V 测试 VLM 辅助审查脚本（qwen3.8-max）。
+"""R2V 测试 VLM 辅助审查脚本（minimax-m3，统一 VLM 入口）。
 
 - check_motion：审查动作模板视频（单人/动作清晰/无文字无 Logo）
 - check_char：审查角色参考图（是否阿迟新海诚动画风半身）
 - review：审查最终 R2V 结果（character_locked / motion_natural / spatial_stable）
+- review_filmstrip：合成 filmstrip 单次审查（节省 VLM 调用，能横向对比帧间一致性）
 
 CLI:
   python r2v_review.py check_motion --video <mp4>
   python r2v_review.py check_char --image <png>
   python r2v_review.py review --video <mp4> --ref <character_ref.png>
+  python r2v_review.py review_filmstrip --video <mp4> [--n 4] [--ref <png>] [--out <json>]
 """
 from __future__ import annotations
 
@@ -24,9 +26,13 @@ from pathlib import Path
 import requests
 from PIL import Image
 
+# 本仓库同目录 helper：合成 filmstrip
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import filmstrip as _fs  # noqa: E402  （提供 filmstrip() / filmstrip_b64()）
+
 API_URL = "https://opencode.ai/zen/go/v1/chat/completions"
 API_KEY = "sk-RoSmCwFjehQiKaliD9TzgLrgXnoOiVlSoIvqOckrRpclpVVoo5L7r3AL1AcmM3ni"
-MODEL = "qwen3.8-max"
+MODEL = "minimax-m3"
 
 
 def frame_to_b64(img: Image.Image, target_kb: int = 80) -> str:
@@ -134,6 +140,28 @@ REVIEW_PROMPT = (
 )
 
 
+def _filmstrip_prompt(n: int) -> str:
+    """FILMSTRIP_PROMPT：单张合成图横评多帧，强调帧间一致性。"""
+    return (
+        "你是一名 AI 视频生成质量审查员。我会给你一张合成图（filmstrip），"
+        f"内含按时间顺序排列的 {n} 帧视频抽帧（每帧左上角有白底黑字序号 1..{n}）。"
+        "请横向对比所有帧，对视频进行多帧合一审查：\n"
+        "1) 逐帧打分：每帧视觉质量（构图/光影/清晰度/无伪影）打 0-100 整数分；\n"
+        "2) 帧间一致性（关键项）：\n"
+        "   - 角色一致性：同一角色是否在多帧中保持同一人（脸型/发型/服装/配饰无漂移、无突变）；\n"
+        "   - 动作连贯性：动作是否自然流畅、无跳帧、无人物闪烁/凭空消失；\n"
+        "   - 运镜稳定性：镜头是否稳定（背景元素无明显漂移、扭曲、闪烁）。\n"
+        "3) 总评分：综合质量 + 一致性的整体 0-100 整数分。\n\n"
+        "只返回一个 JSON 对象（不要 markdown 代码块、不要额外文字），字段严格如下：\n"
+        + ", ".join(f'"frame_{i+1}": <0-100 整数>' for i in range(n))
+        + ', "character_consistent": <true/false>, '
+        '"motion_continuous": <true/false>, '
+        '"spatial_stable": <true/false>, '
+        '"consistency": "<中文一句话总结帧间一致性，含是否漂移/突变/闪烁>", '
+        '"opinion": "<中文一句话整体结论>", "score": <0-100 整数总分>}'
+    )
+
+
 def _run(content: list) -> str:
     return chat([{"role": "user", "content": content}])
 
@@ -190,6 +218,58 @@ def cmd_review(video: Path, ref: Path, out: Path | None) -> int:
     return 0
 
 
+def review_filmstrip(video: Path, n: int = 4, ref: Path | None = None) -> dict:
+    """抽取 n 帧 -> 合成 1 张 filmstrip -> 单次 VLM 调用 -> 返回帧级评分 JSON。
+
+    返回 dict 形如：
+      {"frame_1": 88, "frame_2": 75, ..., "frame_n": 62,
+       "character_consistent": bool, "motion_continuous": bool, "spatial_stable": bool,
+       "consistency": "<中文一句话>", "opinion": "<中文一句话>", "score": int,
+       "raw": <VLM 原文>, "video": str(video), "n": int}
+
+    与 `review` 的区别：
+      - 不依赖独立 ref 图；以相邻帧互为参考
+      - 1 张 image 输入（filmstrip 图），具备横向对比能力
+      - 帧级评分 + 一致性结论，而非单一 overall score
+    """
+    frames = extract_frames(video, n)
+    content: list = [{"type": "text", "text": _filmstrip_prompt(n)}]
+    if ref is not None:
+        ref_img = Image.open(ref)
+        content.append(
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/jpeg;base64,{frame_to_b64(ref_img)}"}}
+        )
+        content.append({"type": "text", "text": "上方为角色定妆参考图，下方 filmstrip 为视频抽帧。"})
+    # 一次 image 输入：filmstrip JPEG（≤200KB），带 data: 前缀直接可被 VLM 解析
+    content.append(
+        {"type": "image_url",
+         "image_url": {"url": _fs.filmstrip_b64(frames, labels=True, target_kb=200)}}
+    )
+    raw = _run(content)
+    review = parse_json(raw)
+    review["raw"] = raw
+    review["video"] = str(video)
+    review["n"] = n
+    # pass 判定：与现有 review 阈值对齐（score>=70 且三项一致性都为 true）
+    review["pass"] = (
+        int(review.get("score", 0) or 0) >= 70
+        and bool(review.get("character_consistent", False))
+        and bool(review.get("motion_continuous", False))
+        and bool(review.get("spatial_stable", False))
+    )
+    return review
+
+
+def cmd_review_filmstrip(video: Path, n: int, ref: Path | None, out: Path | None) -> int:
+    review = review_filmstrip(video, n=n, ref=ref)
+    print(json.dumps(review, ensure_ascii=False, indent=2))
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -207,6 +287,12 @@ def main(argv=None) -> int:
     p3.add_argument("--ref", required=True)
     p3.add_argument("--out", default=None)
 
+    p4 = sub.add_parser("review_filmstrip")
+    p4.add_argument("--video", required=True)
+    p4.add_argument("--n", type=int, default=4, help="抽帧数量（N=4 自动用 2x2 网格，其余 1xN）")
+    p4.add_argument("--ref", default=None, help="可选：1 张角色定妆参考图")
+    p4.add_argument("--out", default=None)
+
     args = ap.parse_args(argv)
     if args.cmd == "check_motion":
         return cmd_check_motion(Path(args.video), Path(args.out) if args.out else None)
@@ -214,6 +300,13 @@ def main(argv=None) -> int:
         return cmd_check_char(Path(args.image), Path(args.out) if args.out else None)
     if args.cmd == "review":
         return cmd_review(Path(args.video), Path(args.ref), Path(args.out) if args.out else None)
+    if args.cmd == "review_filmstrip":
+        return cmd_review_filmstrip(
+            Path(args.video),
+            n=args.n,
+            ref=Path(args.ref) if args.ref else None,
+            out=Path(args.out) if args.out else None,
+        )
     return 2
 
 

@@ -41,14 +41,14 @@ def _base_pipeline() -> dict:
 
 
 def test_pipeline_yaml_parses():
-    """pipeline.yaml 应解析通过，且 6 个阶段全部含 gate。"""
+    """pipeline.yaml 应解析通过，且 7 个阶段全部含 gate。"""
     ok, errors = validate_pipeline(PIPELINE_PATH)
     assert ok, f"pipeline.yaml 应通过校验，但报错: {errors}"
     assert errors == []
 
 
 def test_pipeline_stages_all_have_gates():
-    """pipeline.yaml 的 6 个阶段必须全部声明 gate。"""
+    """pipeline.yaml 的 7 个阶段必须全部声明 gate（Phase B 后新增 overlay 环节）。"""
     ok, errors = validate_pipeline(PIPELINE_PATH)
     assert ok
     # 通过校验本身就保证 gate 完整；此处额外确认阶段数量与 gate 字段。
@@ -57,8 +57,12 @@ def test_pipeline_stages_all_have_gates():
     with PIPELINE_PATH.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     stages = data["stages"]
-    assert len(stages) == 6
+    assert len(stages) == 7
     assert all(stage.get("gate") for stage in stages)
+    stage_ids = [stage["id"] for stage in stages]
+    # Phase B 新增 overlay 阶段，位于 video 之后、audio 之前。
+    assert stage_ids.index("overlay") == stage_ids.index("video") + 1
+    assert stage_ids.index("overlay") == stage_ids.index("audio") - 1
 
 
 def test_missing_gate_fails():
