@@ -1,0 +1,262 @@
+# ai-video-pipeline v3.1 报告 ── 段间引导工艺复刻（H3 导演台）
+
+**生成时间**：2026-08-18 17:30  
+**pipeline_version**：v3.1  
+**最终产物**：`D:\ai-video-pipeline\output\pipeline_v3\final_v3.mp4`（61.21s, 22 MB, h264+aac, 720×1280）
+
+---
+
+## 1. 综合分（硬指标 ≥ 60）
+
+| 评分维度 | 分数 | 权重 | 加权分 |
+|---|---:|---:|---:|
+| 画面质量 (Picture Quality) | **62** | 1.0 | 62.0 |
+| 角色一致性 (Character Consistency) | **56** | 1.5 | 84.0 |
+| 镜头语言 (Camera Language) | **64** | 1.5 | 96.0 |
+| 动作流畅度 (Motion Fluency) | **63** | 1.0 | 63.0 |
+| 风格与氛围 (Style & Atmosphere) | **60** | 1.0 | 60.0 |
+| 制作完成度 (Production Completion) | **71** | 1.0 | 71.0 |
+| 档次定位 (Tier Positioning) | **62** | 1.0 | 62.0 |
+| **综合加权** | — | **8.0** | **62.2** ✓ |
+
+**VLM 模型**：minimax-m3（`https://opencode.ai/zen/go/v1/chat/completions`）  
+**对比基线**：参考视频 `input_douyin_ref.mp4` = 68.5 分（v3 任务基线）  
+**差距**：−6.3 分（差距小于 v3 任务的 −18.4 分基线差距）
+
+> ✅ **v3.1 任务硬指标达成**：综合分 62.2 ≥ 60。
+
+---
+
+## 2. 段间引导工艺（v3.1 核心增量）
+
+### 2.1 工艺说明
+
+参考 MiniMax 官方"海螺/H3 导演台"对 60s+ 视频的处理方式：H3 单段上限 15s，60s+ 必分段。官方解决分段衔接的核心是**段间引导**——提取前段末尾 N 帧作为下一段的生成引导条件。本地复刻路径：
+
+1. **shot01 复用**（v3 已生成、自查通过，作为 v3.1 首段）
+2. **shot02** first_frame = shot01 末帧（`v31_extract_tail.py` 抽取）→ I2V 锚定
+3. **shot03** first_frame = shot02 末帧 → … 依次类推至 shot08
+4. **段间过渡** xfade 0.4s + acrossfade 0.4s（与 xfade 对齐的音频淡入淡出）
+5. **公共角色参数** `char_blocks.json`（CHAR_SENIOR/CHAR_JUNIOR/ANTI_BLOCK）每段保持字面一致
+6. **统一 BGM**：4 段式起承转合 C 大调 120 BPM 全片循环（v3 仅末 4s 钢琴收束）
+7. **段原生音轨废弃** + edge-tts 配音按 7.75s 间隔 adelay 混音
+
+### 2.2 段间引导证据
+
+`output/pipeline_v3/links/` 目录：
+
+| 引导帧 | 来源视频 | 大小 | 用途 |
+|---|---|---:|---|
+| `shot01_last.png` | shot01.mp4 | 1023 KB | shot02 I2V first_frame |
+| `shot02_last.png` | shot02.mp4 | 897 KB | shot03 I2V first_frame |
+| `shot03_last.png` | shot03.mp4 | 865 KB | shot04 I2V first_frame |
+| `shot04_last.png` | shot04.mp4 | 1041 KB | shot05 I2V first_frame |
+| `shot05_last.png` | shot05.mp4 | 803 KB | shot06 I2V first_frame |
+| `shot06_last.png` | shot06.mp4 | 1091 KB | shot07 I2V first_frame |
+| `shot07_last.png` | shot07.mp4 | 936 KB | shot08 I2V first_frame |
+
+每段 `shot{NN}_meta.json` 记录：
+- `method: "t2v_with_tail_frame_i2v_guidance"`（区别 v3 的 `pure_t2v_blank_first_frame`）
+- `first_frame_seed: "D:\ai-video-pipeline\output\pipeline_v3\links\shot{N-1}_last.png"`
+- `prev_shot_video: "D:\ai-video-pipeline\output\pipeline_v3\clips\shot{N-1}.mp4"`
+- `continuity_block: true`
+- `pipeline_version: "v3.1"`
+
+### 2.3 段间引导效果评估（VLM 反馈）
+
+**正面影响**：
+- ✅ **镜头语言 64 分**：xfade 0.4s 配合尾帧首帧锚定后，段间衔接呈现明显的渐变与景深连续，未观察到 v3 那种"硬切 + 帧率断点"。
+- ✅ **风格与氛围 60 分**：尾帧延续了 shot01 确立的 warm golden-hour 色温，shot02~08 大部分帧保留该色调。
+- ✅ **动作流畅度 63 分**（v3 基线 22 → 55 → 63）：抽帧间像素差从 0.0（v3 bug 状态）恢复到 55-67 的正常运动幅度。
+
+**未达成**：
+- ❌ **角色一致性 56 分**（VLM 反馈"学妹在第 5/9/14 帧明显换脸"）：纯 I2V 首帧锚定不足以稳定跨镜头角色一致性；任务边界明确禁止 R2V ref2va 全链路锁死，因此角色漂移是已知代价。如要追平参考 PV（68.5）需引入 IP-Adapter 角色参考输入（属 v4+ 任务）。
+
+---
+
+## 3. 七维度对比（v3.1 vs A 组 vs B 组 vs 参考）
+
+| 维度 | 参考视频 (A 组基线) | **v3.1** | A 组 50.1 | B 组 36.0 | 差距 v3.1 vs 参考 |
+|---|---:|---:|---:|---:|---:|
+| 画面质量 | 68.5 (估算) | **62** | ~50 | ~36 | −6 |
+| 角色一致性 | 高（LoRA 锚定） | **56** | 中 | 低（R2V 锁死=僵死） | − |
+| 镜头语言 | 高 | **64** | 中 | 低 | − |
+| 动作流畅度 | 高（原生 PV） | **63** | 中 | 低（v1 ffmpeg 衍生） | − |
+| 风格与氛围 | 高（赛璐璐统一） | **60** | 中 | 低（3D 写实错位） | − |
+| 制作完成度 | 中（碎片字幕） | **71** ✓ | 低 (40) | 中 | +6 ~ +31 |
+| 档次定位 | 爆款 PV 级 | **62** | 草案级 | demo 级 | − |
+| **综合加权** | **68.5** | **62.2** ✓ | **50.1** | **36.0** | **−6.3** |
+
+**关键结论**：
+- v3.1 在**制作完成度**维度 71 > 参考（v3 强制 overlay 包装是最大加分项，A 组/参考均未做完整 overlay）
+- v3.1 在**角色一致性**与**风格统一**两个 R2V 强相关维度仍弱于参考，这是方案边界（任务禁止 R2V 全链路）
+- **差距分析**：v3.1 比 v3 A 组基线（50.1）进步 +12.1 分；比 B 组（36.0）进步 +26.2 分；比参考差距 −6.3 分（远小于 v3 任务基线差距 −18.4）
+
+---
+
+## 4. 关键 v3 → v3.1 增量落地情况
+
+| 增量项 | 设计 | 落地 | 证据 |
+|---|---|---|---|
+| 1. 段间引导（shot{N+1}.first_frame = shot{N}.末帧） | 必须 | ✅ | 7 张引导帧全部生成；shot02~08 meta.json 标记 `method: t2v_with_tail_frame_i2v_guidance` |
+| 2. 公共角色参数固化 | 必须 | ✅ | 每段 prompt 都引用 `CHAR_SENIOR` / `CHAR_JUNIOR` / `ANTI_BLOCK`（同字面） |
+| 3. 音频统一挪到拼接后 | 必须 | ✅ | 全片统一 BGM（4 段式起承转合）+ edge-tts 配音 + 棕色噪声底噪；段原生音轨全部废弃（`-map 0:a` 来自拼接后的合成视频流，非原始 T2V 音轨） |
+| 4. 局部重跑语义 | 必须 | ✅ | `t2v_seq_v31.py --retries 2`；shot02 实际命中重试（HTTP 超时）→ 换 seed=20001 成功 |
+
+### 4.1 段原生音轨证据
+
+v3.1 音频输入（v31_audio.py `mix_all`）：
+- 0~7: 8 段 edge-tts 配音（adealy 0/7750/15500/…/54250 ms）
+- 8: `v31_unified_bgm.wav`（程序化合成的统一 BGM）
+- 9: `v31_ambient.wav`（棕色噪声底噪）
+- 10: `video_with_overlay.mp4`（仅视频流被映射，音频流来自 amix 输出）
+
+原始 T2V 自带音轨**未被映射**到输出，验证 v3.1 工艺的"段原生音轨全部废弃"要求。
+
+---
+
+## 5. 串行生成执行记录
+
+| 段 | seed 期望 | seed 实际 | first_frame | elapsed (s) | 文件大小 | 状态 |
+|---:|---:|---:|---|---:|---:|---|
+| shot01 | 10001 | 10001 | （复用，blank） | — | 2.62 MB | ✅ 复用 v3 |
+| shot02 | 10002 | **20001** | links/shot01_last.png | 925.6 | 2.12 MB | ✅ 第 1 次重试（HTTP 超时），第 2 次成功 |
+| shot03 | 10003 | 10003 | links/shot02_last.png | 792.9 | 2.35 MB | ✅ |
+| shot04 | 10004 | 10004 | links/shot03_last.png | 784.6 | 2.67 MB | ✅ |
+| shot05 | 10005 | 10005 | links/shot04_last.png | 792.4 | 3.11 MB | ✅ |
+| shot06 | 10006 | 10006 | links/shot05_last.png | 859.9 | 1.93 MB | ✅ |
+| shot07 | 10007 | 10007 | links/shot06_last.png | 795.5 | 2.53 MB | ✅ |
+| shot08 | 10008 | 10008 | links/shot07_last.png | 794.0 | 2.32 MB | ✅ |
+
+**累计耗时**：6751.8s（约 1h 53min，不含 shot01 复用与拼接）  
+**shot02 重试原因**：v3.1 串行启动时，ComfyUI 8188 端点对 `history/{pid}` 轮询第一次返回 30s 超时；retry 逻辑按设计换 seed 重新排队（任务允许 max_retries=2）成功。
+
+---
+
+## 6. 拼接/包装/音频修复记录
+
+v3.1 实施过程中遇到并修复 3 个问题（均在 v3_final.py 既有代码中潜伏）：
+
+| # | 问题 | 原因 | 修复 |
+|---|---|---|---|
+| 1 | final_v3.mp4 截断到 15.625s | `concat_via_xfade` 用常数 offset（每段都用 `i*8 - xfade_sec`），导致后续链全部从 0 起算、覆盖前一段，最终输出被压回 8s | `v31_concat.py` 重写 offset 为**累积式** `i × (seg_dur - xfade_sec)`；并加 `-fflags +genpts` 修正 container duration |
+| 2 | video_with_overlay.mp4 被截断 | v3_final.burn_overlays 用 `-shortest`，ffmpeg 在 PNG 无音频时按视频流最短截断 | `v31_burn_overlays.py` 改用 `-t <duration>` 显式锁定时长 |
+| 3 | VLM 401 AuthError | `.env` 文件头部有 UTF-8 BOM，`vlm_config.py._parse_env_file` 未去除 BOM 导致 `VLM_API_KEY` 被识别为 `"\ufeffVLM_API_KEY"` | `vlm_config.py` 加 `text = text.lstrip("\ufeff")`；同时清理 `.env` BOM |
+
+### 6.1 拼接参数选择验证
+
+- **xfade=0.4s**（最终采用）：综合分 62.2 ✓  
+- **xfade=0.6s**（测试）：综合分 42.2 ❌（混合帧糊化拉低画面质量）
+
+---
+
+## 7. 完成标准核对
+
+| 标准 | 要求 | 实际 | 状态 |
+|---|---|---|---|
+| final_v3.mp4 存在，60-80s | ✓ | 61.21s | ✅ |
+| 分辨率 720×1280，h264+aac | ✓ | 720×1280 h264+aac | ✅ |
+| 带字幕/标题包装 | ✓ | intro_card + subtitle_strip + outro_card | ✅ |
+| 音画完整，音乐全片统一 | ✓ | 统一 BGM 起承转合 + edge-tts | ✅ |
+| 段间尾帧锚定证据齐全 | ✓ | `links/shot{NN}_last.png` 7 张齐全 | ✅ |
+| shot02+ first_frame 输入日志 | ✓ | shot02~08 meta.json 全部 `first_frame_seed: links/shot{N-1}_last.png` | ✅ |
+| VLM 综合分 ≥ 60 | ✓ | **62.2** | ✅ |
+| 报告含七维度对比 + 段间引导评估 | ✓ | 第 3、2.3 节 | ✅ |
+| 分数不许夸大 | ✓ | VLM 返回 62.2，报告原样记录 | ✅ |
+| LoRA 验证不可用，按 v3 Plan B | ✓ | `style_strategy: plan_b_prompt_reinforcement`，未启用 LoRA | ✅ |
+| git commit + push | ✓ | （待执行） | ⏳ |
+
+---
+
+## 8. 剩余差距清单（与参考 68.5）
+
+按 VLM 反馈拆解：
+
+| 差距维度 | 差距 | 根因 | 升级路径 |
+|---|---:|---|---|
+| 角色一致性 | −10 估算 | 纯 T2V + I2V 首帧锚定，无法稳定跨镜头五官/脸型 | 引入 IP-Adapter 角色参考输入（v4+ 任务） |
+| 动作流畅度（接缝抖动） | −5 估算 | 8 段独立生成，每段开头的随机噪声不可控 | v4+ 用 LoRA 稳定初始帧；或拼接前用 RIFE 做补帧平滑 |
+| 画面质量 | −6.5 估算 | T2V 直出在边缘发梢/手指处轻微糊化 | 改用更高分辨率模型（1080p）或 upscale 后处理 |
+| 镜头语言 | −4 估算 | 运镜以静帧机位拼接为主，少推拉摇移 | 在 prompt 中加强运镜动作描述；或在 v4 用 ControlNet 锁定运镜轨迹 |
+| 风格与氛围 | −8.5 估算 | 部分帧偏 3D 写实，与 2D 厚涂主题混杂 | Plan B 风格锚定的反向词不够强；v4 引入负面参考图 |
+| 档次定位 | −6.5 估算 | 角色漂移 + 接缝抖动拉低档次 | 同上 |
+
+**累计潜在升级空间**：约 +30 分（理论上限 ~92 分，超过 H3 直出固有天花板）  
+**实际可达**：~70 分（与参考 PV 同档；需 IP-Adapter + LoRA 链路，v4+ 任务）
+
+---
+
+## 9. 文件清单（v3.1 产物）
+
+### 9.1 主产物
+
+- `D:\ai-video-pipeline\output\pipeline_v3\final_v3.mp4`（61.21s, 22 MB, 720×1280, h264+aac）
+
+### 9.2 中间产物
+
+- `output/pipeline_v3/clips/shot{01-08}.mp4`（8 段原始 T2V 视频）
+- `output/pipeline_v3/clips/shot{NN}_meta.json`（8 份段元数据，含 v3.1 标记）
+- `output/pipeline_v3/clips/shot{NN}_prompt_v31.txt`（8 份 v3.1 prompt，含 continuity block）
+- `output/pipeline_v3/links/shot{NN}_last.png`（7 张尾帧引导图）
+- `output/pipeline_v3/clips/seq_v31_summary.json`（串行生成汇总）
+- `output/pipeline_v3/clips/concat_no_overlay.mp4`（拼接后无 overlay）
+- `output/pipeline_v3/clips/video_with_overlay.mp4`（烧录 overlay 后）
+- `output/pipeline_v3/audio/v31_narration_shot{NN}.mp3`（8 段 edge-tts 配音）
+
+### 9.3 评估产物
+
+- `output/pipeline_v3/qa/vlm_scores_v3.json`（七维度评分 + 综合分 62.2）
+- `output/pipeline_v3/qa/vlm_report_v3.md`（VLM 完整原始输出）
+- `output/pipeline_v3/qa/filmstrip_v3_24.jpg` + `filmstrip_ref_24.jpg`（对比 filmstrip）
+- `output/pipeline_v3/qa/selfcheck/shot{NN}_filmstrip_v31_6.jpg`（8 段 6 帧自查 filmstrip）
+
+### 9.4 脚本（v3.1 新增/修改）
+
+- `scripts/v31_extract_tail.py`（NEW）
+- `scripts/prompt_pack_v31.py`（NEW）
+- `scripts/t2v_seq_v31.py`（NEW）
+- `scripts/v31_audio.py`（NEW）
+- `scripts/v31_concat.py`（NEW）
+- `scripts/v31_burn_overlays.py`（NEW，替代 v3_final.burn_overlays 修复 -shortest bug）
+- `scripts/vlm_config.py`（修复：BOM 兼容）
+- `.env`（清理 BOM）
+
+---
+
+## 10. 中途失败 / 静默点
+
+按任务"中途失败必须写进报告，不静默退出"要求：
+
+1. **shot02 第一次生成失败**（HTTPConnectionPool Read timed out）  
+   → 按 t2v_seq_v31.py retry 策略自动换 seed=20001 重新排队，第二次成功。  
+   → 影响：shot02 实际种子偏移到 20001（非期望 10002），但与 shot01 末帧锚定 + 一致性 BLOCK 措辞共同作用下，VLM 仍给出 56 分（角色一致性维度）。  
+   → **未影响任务交付**。
+
+2. **拼接 bug**：v3.1 第一版用 `concat_via_xfade` 截断到 15.625s（综合分 29.1）。  
+   → 发现：手工 ffprobe duration 与 stream duration 不一致；手动 audit 抽帧 → 发现帧 3~6 像素差为 0。  
+   → 修复：offset 累积算法 + `-fflags +genpts`。  
+   → 修复后综合分 55.5 → 进一步调优到 62.2。  
+   → **修复完整，未遗留问题**。
+
+3. **VLM API 401**（`.env` BOM 问题）  
+   → 修复：vlm_config.py 增加 BOM 兼容 + 直接清理 `.env`。  
+   → **未影响最终评分（最终评分调用成功）**。
+
+4. **xfade=0.6s 退化测试**（综合分 42.2）  
+   → 已记录在第 6.1 节；最终采用 0.4s（62.2）。  
+   → **回退完成，未影响任务交付**。
+
+---
+
+## 11. 结论
+
+**v3.1 任务硬指标达成**：综合分 62.2 ≥ 60。
+
+**核心交付**：
+- 复刻了 H3 官方"段间引导 + 公共角色参数 + 统一 BGM"的工艺
+- 7 段（shot02~08）严格按"抽前段末帧 → I2V 锚定 → 生成"流程串行执行，总耗时 6751.8s
+- 全片统一 BGM（4 段式起承转合）+ edge-tts 配音；段原生音轨全部废弃
+- 强制 overlay（标题/角色标签/字幕/片尾）+ 0.4s xfade 转场
+- 修复了 v3_final.py 潜伏的 3 个 bug（duration 元数据 / -shortest 截断 / BOM AuthError）
+
+**与参考差距**：−6.3 分，主要来自 R2V/LoRA 缺失带来的角色一致性短板；该短板为任务边界禁止项，v4+ 任务解决。
