@@ -1,0 +1,117 @@
+{
+  "title": "选学姐还是学妹？（v3.4-line0 / 30s / 3 段 × 10s）",
+  "version": "v3.4",
+  "pipeline": "ai-video-pipeline v3.4-line0",
+  "reference_video": "D:\\ai-video-pipeline\\input_h3_pv_ref.mp4",
+  "reference_score": 68.5,
+  "baseline_v33_score": 63.6,
+  "baseline_v33_commit": "759f710",
+  "style_strategy": "v3.4-line0: Context-IR + P1_minimal_music_skeleton + P2_single_action_chain_with_timing + P3_well_framed_composition",
+  "lora_enabled": false,
+  "target_resolution": "1344x768",
+  "target_duration_sec": 30,
+  "n_shots": 3,
+  "shots": [
+    {
+      "index": 1,
+      "title": "COLOR RIOT / 学姐开场",
+      "duration_sec": 10,
+      "downbeat_start": 0.0,
+      "char_focus": "senior",
+      "include_senior": true,
+      "include_junior": false,
+      "transition_in": "color_explosion",
+      "transition_out": "ink_burst",
+      "camera": {
+        "type": "whip pan + push in",
+        "amplitude": "medium",
+        "speed": "fast"
+      },
+      "scene": "extreme close-up of senior's right hand holding a cherry blossom petal, silver ring catches neon magenta light, neon CMYK background explodes in radial sunburst lines and halftone dots. WELL-FRAMED: hand then pulls back to reveal full face, both eyes visible, complete head-and-shoulders framing.",
+      "timed_shot_list": [
+        "[0-2s] extreme close-up of senior's hand reaching toward camera from off-screen left, neon radial background bursts, comic panel grid overlay",
+        "[2-4s] camera pushes in to extreme close-up of silver ring on index finger catching magenta+cyan light, hand slowly rotates to reveal cherry petal",
+        "[4s] COLOR EXPLOSION TRANSITION — full-frame magenta/cyan/lime ink burst sweeps across from right edge",
+        "[4-10s] medium close-up side profile of senior's face, rainbow-gradient iris visible, long black hair with cyan-blue highlight strands catches fluorescent green rim light, abstract radial line background pulses behind her, ending with full head-and-shoulders in frame"
+      ]
+    },
+    {
+      "index": 2,
+      "title": "FABRIC WIPE / 学妹登场",
+      "duration_sec": 10,
+      "downbeat_start": 10.0,
+      "char_focus": "junior",
+      "include_senior": false,
+      "include_junior": true,
+      "transition_in": "fabric_wipe",
+      "transition_out": "diagonal_slash",
+      "camera": {
+        "type": "whip pan + dolly out",
+        "amplitude": "medium",
+        "speed": "fast"
+      },
+      "scene": "extreme close-up of junior's twin tails with bright orange ribbons fluttering, yellow-green eye with rainbow iris flecks visible between hair strands, cream sailor cardigan sleeve wipes past camera. WELL-FRAMED: shot pulls back to frame entire face, both eyes visible, full head-and-shoulders.",
+      "timed_shot_list": [
+        "[0-3s] extreme close-up of junior's twin tails with bright orange ribbons fluttering, fabric whip across foreground, halftone dots dominant",
+        "[3-5s] camera dollies back to reveal yellow-green eye with rainbow iris flecks between hair strands, cheek with brighter blush, eye looks directly at camera",
+        "[5s] FABRIC WIPE TRANSITION — cream sailor cardigan sleeve sweeps past camera from left",
+        "[5-10s] medium close-up side profile of junior's face, chestnut twin tails bouncing, abstract checkerboard tiles rotate behind her, plush star pendant visible on orange ribbon at neck, ending with full head-and-shoulders framing, both eyes visible"
+      ]
+    },
+    {
+      "index": 3,
+      "title": "DIAGONAL SLASH / 双人收束",
+      "duration_sec": 10,
+      "downbeat_start": 20.0,
+      "char_focus": "both",
+      "include_senior": true,
+      "include_junior": true,
+      "transition_in": "diagonal_slash",
+      "transition_out": "halftone_flash",
+      "camera": {
+        "type": "whip pan + pull back",
+        "amplitude": "medium",
+        "speed": "fast"
+      },
+      "scene": "senior and junior standing back-to-back in a flat-color pop-art frame, senior left in navy blazer, junior right in cream cardigan. WELL-FRAMED: shot ends with both faces fully in frame, both eyes of each character visible, complete head-and-shoulders.",
+      "timed_shot_list": [
+        "[0-4s] medium two-shot: senior left + junior right standing back-to-back, navy blazer vs cream cardigan, silver ring on senior's hand + orange ribbons on junior's tails visible at frame edges",
+        "[4s] DIAGONAL SLASH TRANSITION — lemon yellow slash wipes diagonally across frame from upper-left to lower-right",
+        "[4-10s] medium shot both facing camera, senior with composed faint smile + junior with curious bright smile, fluorescent green+lemon yellow ink splash sticker behind them, halftone dots pulse, ending with both heads-and-shoulders clearly framed"
+      ]
+    }
+  ],
+  "cut_points": [
+    {
+      "from_shot": 1,
+      "to_shot": 2,
+      "cut_at_sec": 10.0,
+      "xfade_sec": 0.0,
+      "in_transition": "ink_burst",
+      "out_transition": "fabric_wipe"
+    },
+    {
+      "from_shot": 2,
+      "to_shot": 3,
+      "cut_at_sec": 20.0,
+      "xfade_sec": 0.0,
+      "in_transition": "diagonal_slash",
+      "out_transition": "diagonal_slash"
+    }
+  ],
+  "intro_card": null,
+  "outro_card": null,
+  "bgm": {
+    "source": "v3.4 line0: P1 minimal music skeleton in prompt + ffmpeg bgm_mix_v34.py post-mix",
+    "bpm": 120.0,
+    "beat_period_sec": 0.5,
+    "target_alignment_tolerance_ms": 41,
+    "file": "output/pipeline_v34/music/bgm_v34.wav"
+  },
+  "voiceover": "NONE — 全片零对白",
+  "v34_changes": {
+    "P1_music_post_processing": "minimal skeleton in prompt + bgm_mix_v34.py replaces H3 audio",
+    "P2_motion_speed_limiting": "single motion chain with then-clauses + speed_segment_v34.py local speed-up",
+    "P3_camera_composition": "ending_frame_cue well-framed template + vlm_gate_v34.py composition integrity check"
+  }
+}

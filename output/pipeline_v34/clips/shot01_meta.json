@@ -1,0 +1,45 @@
+{
+  "shot": 1,
+  "title": "COLOR RIOT / 学姐开场",
+  "duration_sec": 10,
+  "downbeat_start": 0.0,
+  "include_senior": true,
+  "include_junior": false,
+  "transition_in": "color_explosion",
+  "transition_out": "ink_burst",
+  "camera": {
+    "type": "whip pan + push in",
+    "amplitude": "medium",
+    "speed": "fast"
+  },
+  "prompt_chars": 3690,
+  "style_block_chars": 503,
+  "char_block_chars": 544,
+  "pipeline_version": "v3.4-line0",
+  "style_strategy": "v3.4: Context-IR integrated_multimodal_description + P1_minimal_music_skeleton + P2_single_action_chain_with_timing + P3_well_framed_composition",
+  "lora_enabled": false,
+  "p1_music_skeleton": "non-diegetic music: 120 BPM beat grid, minimal background beat, low volume, no melody. Audio bed is intentionally sparse during generation; the final layered BGM track is mixed in post by an external ffmpeg mixer to keep every beat aligned to the 120 BPM grid (≤ 41 ms beat-grid error) and to avoid the H3 monolithic generated tone.",
+  "p2_action_chain_text": "Single motion chain executed in sequence: extreme close-up of senior's hand reaching toward camera from off-screen left, neon radial background bursts, comic panel grid overlay; then camera pushes in to extreme close-up of silver ring on index finger catching magenta+cyan light, hand slowly rotates to reveal cherry petal; then [4s] COLOR EXPLOSION TRANSITION — full-frame magenta/cyan/lime ink burst sweeps across from right edge; then medium close-up side profile of senior's face, rainbow-gradient iris visible, long black hair with cyan-blue highlight strands catches fluorescent green rim light, abstract radial line background pulses behind her, ending with full head-and-shoulders in frame. Each motion is fast, snappy, and completes in approximately 1.5 seconds before the next begins. No lingering between motions.",
+  "p2_speed_windows": [
+    {
+      "start": 0.0,
+      "end": 2.0,
+      "kind": "motion"
+    },
+    {
+      "start": 2.0,
+      "end": 4.0,
+      "kind": "motion"
+    },
+    {
+      "start": 4.0,
+      "end": 10.0,
+      "kind": "motion"
+    }
+  ],
+  "p2_action_timing_suffix": "Action timing constraint: this segment contains exactly ONE primary motion chain executed in sequence with explicit then-clauses. Each motion is fast, snappy, and completes in approximately 1.5 seconds before the next begins. No lingering, no slow motion, no held poses between motions. The total motion density is high but the time-on-screen per motion is short.",
+  "p3_ending_frame_cue": "the camera pulls back to frame the ENTIRE head and shoulders, both eyes clearly visible, well-framed composition, no half-face cropping, no extreme close-up that leaves only one eye on screen",
+  "p3_style_block_suffix": "well-framed composition, complete facial framing",
+  "bpm_target": 120.0,
+  "beat_period_sec": 0.5
+}

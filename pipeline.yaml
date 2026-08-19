@@ -21,17 +21,23 @@
 pipeline: ai-video
 version: 3.0
 schema_version: 3
+v34_changes_branch: v34
+v34_changes_implemented: true
+v34_implementation_report: output/pipeline_v34/v34_impl_report.txt
 
 metadata:
   supersedes: pipeline.yaml v0.1 (image+character+videofmpeg chain)
   based_on_experiments:
     - abtest_report.txt          # 2026-08-18 A/B 对照实验
     - output/abtest/prompts_a.md # A 组 8 段 prompt 全文
+    - output/pipeline_v33_line0/v33_line0_report.txt  # 2026-08-19 v33-line0 (commit 759f710) 30s 验证版基线
   expected_score: "60-65 / 70 (参考视频上限 70)"
   baseline_score: 50.1            # A 组基线
+  v33_baseline_score: 63.6        # v3.3-line0 验证版基线
   gate_minimum: 60.0             # v3 任务硬指标
   lora_status: "❌ 不启用（docs/v3-lora-verdict.md）"
   prompt_strategy: "plan_b_prompt_reinforcement"  # 替代 LoRA 风格锚定
+  v34_strategy: "Context-IR integrated_multimodal_description + P1_minimal_music_skeleton + P2_single_action_chain_with_timing + P3_well_framed_composition"
 
 ################################################################################
 # 主链路：6 阶段
@@ -303,3 +309,80 @@ diff_vs_v1:
     final:
         v1: "VLM 评分但不强制 ≥ 60"
         v3: "硬性 ≥ 60；不达标则报告标红，不静默退出"
+
+################################################################################
+# v3.4 增量（branch: v34；per 任务书 v3.4）
+#   三个改造点：P1 音乐后期化 / P2 动作限速 / P3 镜头构图
+#   步进：P0 社区核实 → P1 → P2 → P3；本任务**只实现代码**，不跑真实生成
+################################################################################
+v34_changes:
+  branch: v34
+  base_commit: 759f710           # v3.3-line0 (Context-IR 工艺 prompt)
+  user_feedback_addressed:
+    - id: P1
+      issue: "背景音突兀单调（音乐节奏对但单调，whoosh 突兀）"
+      fix: "prompt 音乐描述收敛为极简拍点骨架 + 后期 ffmpeg 铺专业 BGM"
+    - id: P2
+      issue: "动作拖沓（一个动作好几秒，不自然）"
+      fix: "prompt 单动作链 + then 表 + ffmpeg 局部 1.2x-1.5x 变速 + RIFE 接口"
+    - id: P3
+      issue: "镜头构图奇怪（只一只眼睛、拉远后半张脸就结束）"
+      fix: "prompt 终幅构图模板 + VLM 门禁审核脚本（fake-input 自检）"
+  p0_community_assets:
+    - repo: T8mars/H3-audioT8
+      claimed_stars: 743
+      actual_status: "404 - repo does not exist on GitHub"
+      verdict: "UNAVAILABLE - 必须自研 ffmpeg 混音脚本"
+    - repo: Shrek3OnVH5/MiniMax-H3-NativeAudio-MusicVideo-Workflow
+      claimed_stars: 71
+      actual_status: "README available; provides ComfyUI-H3-NativeAudioLock custom node (locks supplied audio into H3 latent) + RIFE interpolation templates"
+      verdict: "OUT_OF_SCOPE - 提供的是 vocal lock + RIFE 补帧，不是音乐后期化；与本任务目标不一致"
+    - chosen: "self-implemented ffmpeg-based BGM mixer (bgm_mix_v34.py) reusing bgm_gen_v32.py's 120 BPM J-pop skeleton"
+  new_scripts:
+    - id: prompt_pack_v34
+      path: scripts/prompt_pack_v34.py
+      purpose: "P1/P2/P3 工艺改造的 prompt-pack 输出（含 ending_frame_cue / single_action_chain / minimal_music_skeleton）"
+    - id: bgm_mix_v34
+      path: scripts/bgm_mix_v34.py
+      purpose: "P1 后期化：drop H3 audio，铺专业 BGM，120 BPM 拍点对齐（≤1 帧 @ 24fps = 42ms）"
+    - id: speed_segment_v34
+      path: scripts/speed_segment_v34.py
+      purpose: "P2 局部变速：setpts+enable=between()，1.2-1.5x；RIFE 滤镜链可解析（接口保留）"
+    - id: vlm_gate_v34
+      path: scripts/vlm_gate_v34.py
+      purpose: "P3 VLM 门禁：composition_integrity / motion_naturalness / music_transition 三项检查；fake-input 自检模式"
+    - id: compose_final_v34
+      path: scripts/compose_final_v34.py
+      purpose: "v3.4 合并成片：on-beat cross-cut + 统一 BGM，30s，零独白；--dry-run 支持"
+  new_artifacts:
+    - output/pipeline_v34/sb/storyboard_v34.json         # 3 段 × 10s = 30s 测试 storyboard
+    - output/pipeline_v34/clips/style_block_v34.txt     # P3 well-framed composition 补丁
+    - output/pipeline_v34/clips/char_blocks_v34.json    # 与 v3.3 字面一致（diff=0 校验锚点）
+    - output/pipeline_v34/clips/shot{NN}_prompt.txt     # v3.4 H3 三段式 prompt
+    - output/pipeline_v34/clips/shot{NN}_meta.json      # 含 p2_speed_windows / p3_ending_frame_cue / p1_music_skeleton
+    - output/pipeline_v34/clips/style_strategy_v34.json # P1/P2/P3 三处校验
+    - output/pipeline_v34/qa/vlm_gate/v34_vlm_gate.json # VLM 门禁 JSON
+    - output/pipeline_v34/qa/vlm_gate/v34_vlm_gate.md   # VLM 门禁 Markdown
+    - output/pipeline_v34/test_audio/bgm_mix_test.json  # 3s 测试音频拍点对齐 dry-run 报告
+    - output/pipeline_v34/v34_impl_report.txt           # 实现报告（必交付）
+  v34_gate:
+    - id: v34-prompt-strategy
+      description: "P1/P2/P3 三个改造点必须在每段 prompt 都存在"
+      tool: "style_strategy_v34.json ok=true (P1=3/3 P2=3/3 P3=3/3)"
+    - id: v34-bgm-alignment
+      description: "BGM 第一拍对齐 ≤ 42ms（1 帧 @ 24fps 取整上界）"
+      tool: "bgm_mix_v34._meta.alignment_pass / compose_final_v34._meta.beat_alignment_pass"
+    - id: v34-vlm-gate
+      description: "VLM 门禁三项检查 pass（fake-input 自检模式）"
+      tool: "vlm_gate_v34._meta.overall_pass"
+  hard_prohibitions_in_v34:
+    - "禁止启动 ComfyUI / 投队列 / 生成任何视频帧"
+    - "禁止调用真实 VLM（只实现脚本 + fake-input 自检）"
+    - "禁止拼接成片 / 渲染最终片（仅 dry-run）"
+    - "所有「生成类」验证一律 dry-run 或语法级"
+  validation_methods_used:
+    - "python -m py_compile（全部 5 个新脚本）"
+    - "每个脚本 --dry-run 输出预期 ffmpeg 命令链"
+    - "prompt 模板用 storyboard_v34.json 渲染 3 段，确认 P1/P2/P3 三处都在"
+    - "BGM 混音脚本用 3s 测试音频 dry-run 验证拍点对齐逻辑"
+    - "VLM 门禁脚本用 fake-input 自检，输出 JSON + Markdown 报告"

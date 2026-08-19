@@ -1,0 +1,45 @@
+{
+  "shot": 2,
+  "title": "FABRIC WIPE / 学妹登场",
+  "duration_sec": 10,
+  "downbeat_start": 10.0,
+  "include_senior": false,
+  "include_junior": true,
+  "transition_in": "fabric_wipe",
+  "transition_out": "diagonal_slash",
+  "camera": {
+    "type": "whip pan + dolly out",
+    "amplitude": "medium",
+    "speed": "fast"
+  },
+  "prompt_chars": 3595,
+  "style_block_chars": 503,
+  "char_block_chars": 477,
+  "pipeline_version": "v3.4-line0",
+  "style_strategy": "v3.4: Context-IR integrated_multimodal_description + P1_minimal_music_skeleton + P2_single_action_chain_with_timing + P3_well_framed_composition",
+  "lora_enabled": false,
+  "p1_music_skeleton": "non-diegetic music: 120 BPM beat grid, minimal background beat, low volume, no melody. Audio bed is intentionally sparse during generation; the final layered BGM track is mixed in post by an external ffmpeg mixer to keep every beat aligned to the 120 BPM grid (≤ 41 ms beat-grid error) and to avoid the H3 monolithic generated tone.",
+  "p2_action_chain_text": "Single motion chain executed in sequence: extreme close-up of junior's twin tails with bright orange ribbons fluttering, fabric whip across foreground, halftone dots dominant; then camera dollies back to reveal yellow-green eye with rainbow iris flecks between hair strands, cheek with brighter blush, eye looks directly at camera; then [5s] FABRIC WIPE TRANSITION — cream sailor cardigan sleeve sweeps past camera from left; then medium close-up side profile of junior's face, chestnut twin tails bouncing, abstract checkerboard tiles rotate behind her, plush star pendant visible on orange ribbon at neck, ending with full head-and-shoulders framing, both eyes visible. Each motion is fast, snappy, and completes in approximately 1.5 seconds before the next begins. No lingering between motions.",
+  "p2_speed_windows": [
+    {
+      "start": 0.0,
+      "end": 3.0,
+      "kind": "motion"
+    },
+    {
+      "start": 3.0,
+      "end": 5.0,
+      "kind": "motion"
+    },
+    {
+      "start": 5.0,
+      "end": 10.0,
+      "kind": "motion"
+    }
+  ],
+  "p2_action_timing_suffix": "Action timing constraint: this segment contains exactly ONE primary motion chain executed in sequence with explicit then-clauses. Each motion is fast, snappy, and completes in approximately 1.5 seconds before the next begins. No lingering, no slow motion, no held poses between motions. The total motion density is high but the time-on-screen per motion is short.",
+  "p3_ending_frame_cue": "the camera pulls back to frame the ENTIRE head and shoulders, both eyes clearly visible, well-framed composition, no half-face cropping, no extreme close-up that leaves only one eye on screen",
+  "p3_style_block_suffix": "well-framed composition, complete facial framing",
+  "bpm_target": 120.0,
+  "beat_period_sec": 0.5
+}

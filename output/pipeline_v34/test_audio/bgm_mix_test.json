@@ -1,0 +1,23 @@
+{
+  "compose_phase": "bgm_mix_v34",
+  "pipeline_version": "v3.4",
+  "input_video": "output\\pipeline_v34\\test_audio\\test_3s.wav",
+  "bgm_path": "output\\pipeline_v34\\test_audio\\test_3s.wav",
+  "video_duration_sec": 3.0,
+  "bpm": 120.0,
+  "beat_period_sec": 0.5,
+  "n_beats": 7,
+  "first_beat_grid_offset_ms": 41.67,
+  "fps": 24,
+  "beat_alignment_tolerance_ms": 42,
+  "alignment_pass": true,
+  "ffmpeg_cmd": "ffmpeg -y -stream_loop -1 -i output\\pipeline_v34\\test_audio\\test_3s.wav -i output\\pipeline_v34\\test_audio\\test_3s.wav -filter_complex atrim=0:3.000,asetpts=PTS-STARTPTS,aformat=sample_rates=32000:channel_layouts=stereo,volume=0.85[bgm];[bgm]alimiter=limit=0.95,loudnorm=I=-16:TP=-1:LRA=11[aout] -map 1:v -map [aout] -c:v copy -c:a aac -b:a 192k -ar 32000 -shortest -movflags +faststart output\\pipeline_v34\\test_audio\\test_3s_out.mp4",
+  "filter_complex": "atrim=0:3.000,asetpts=PTS-STARTPTS,aformat=sample_rates=32000:channel_layouts=stereo,volume=0.85[bgm];[bgm]alimiter=limit=0.95,loudnorm=I=-16:TP=-1:LRA=11[aout]",
+  "loudnorm": "-16 LUFS",
+  "voiceover": "NONE",
+  "removed_original_audio": true,
+  "removed_whoosh": true,
+  "continuous_across_segments": true,
+  "dry_run": true,
+  "generated_at": "2026-08-19T19:30:26"
+}

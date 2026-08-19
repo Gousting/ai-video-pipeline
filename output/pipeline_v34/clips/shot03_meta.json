@@ -1,0 +1,40 @@
+{
+  "shot": 3,
+  "title": "DIAGONAL SLASH / 双人收束",
+  "duration_sec": 10,
+  "downbeat_start": 20.0,
+  "include_senior": true,
+  "include_junior": true,
+  "transition_in": "diagonal_slash",
+  "transition_out": "halftone_flash",
+  "camera": {
+    "type": "whip pan + pull back",
+    "amplitude": "medium",
+    "speed": "fast"
+  },
+  "prompt_chars": 4178,
+  "style_block_chars": 503,
+  "char_block_chars": 1182,
+  "pipeline_version": "v3.4-line0",
+  "style_strategy": "v3.4: Context-IR integrated_multimodal_description + P1_minimal_music_skeleton + P2_single_action_chain_with_timing + P3_well_framed_composition",
+  "lora_enabled": false,
+  "p1_music_skeleton": "non-diegetic music: 120 BPM beat grid, minimal background beat, low volume, no melody. Audio bed is intentionally sparse during generation; the final layered BGM track is mixed in post by an external ffmpeg mixer to keep every beat aligned to the 120 BPM grid (≤ 41 ms beat-grid error) and to avoid the H3 monolithic generated tone.",
+  "p2_action_chain_text": "Single motion chain executed in sequence: medium two-shot: senior left + junior right standing back-to-back, navy blazer vs cream cardigan, silver ring on senior's hand + orange ribbons on junior's tails visible at frame edges; then [4s] DIAGONAL SLASH TRANSITION — lemon yellow slash wipes diagonally across frame from upper-left to lower-right; then medium shot both facing camera, senior with composed faint smile + junior with curious bright smile, fluorescent green+lemon yellow ink splash sticker behind them, halftone dots pulse, ending with both heads-and-shoulders clearly framed. Each motion is fast, snappy, and completes in approximately 1.5 seconds before the next begins. No lingering between motions.",
+  "p2_speed_windows": [
+    {
+      "start": 0.0,
+      "end": 4.0,
+      "kind": "motion"
+    },
+    {
+      "start": 4.0,
+      "end": 10.0,
+      "kind": "motion"
+    }
+  ],
+  "p2_action_timing_suffix": "Action timing constraint: this segment contains exactly ONE primary motion chain executed in sequence with explicit then-clauses. Each motion is fast, snappy, and completes in approximately 1.5 seconds before the next begins. No lingering, no slow motion, no held poses between motions. The total motion density is high but the time-on-screen per motion is short.",
+  "p3_ending_frame_cue": "the camera pulls back to frame the ENTIRE head and shoulders, both eyes clearly visible, well-framed composition, no half-face cropping, no extreme close-up that leaves only one eye on screen",
+  "p3_style_block_suffix": "well-framed composition, complete facial framing",
+  "bpm_target": 120.0,
+  "beat_period_sec": 0.5
+}

@@ -1,0 +1,39 @@
+{
+  "available": true,
+  "overall_pass": true,
+  "checks": {
+    "composition_integrity": {
+      "pass": true,
+      "reason": "fake: subject framed fully, both eyes visible, no half-face cropping",
+      "severity": "none"
+    },
+    "motion_naturalness": {
+      "pass": true,
+      "reason": "fake: motion snappy (~1.5s per action), no dragging",
+      "severity": "none"
+    },
+    "music_transition": {
+      "pass": true,
+      "reason": "fake: 120 BPM grid aligned, no jarring whoosh at cuts",
+      "severity": "none"
+    }
+  },
+  "score": 80,
+  "opinion": "fake-input self-test passed (no real VLM invoked)",
+  "fake": true,
+  "inputs": [
+    {
+      "path": "output\\pipeline_v33_line0\\clips_v33_30s\\shot01.mp4",
+      "kind": "video",
+      "index": 0
+    }
+  ],
+  "n_inputs": 1,
+  "generated_at": "2026-08-19T19:32:26",
+  "pipeline_version": "v3.4",
+  "gate_checks_v34": [
+    "composition_integrity",
+    "motion_naturalness",
+    "music_transition"
+  ]
+}
