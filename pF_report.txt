@@ -1,0 +1,307 @@
+================================================================================
+Phase F Report: 统一 VLM key 配置入口（Unified VLM config via .env）
+================================================================================
+生成时间: 2026-08-18  (任务书: C:\Users\shrine\oc_task_f_config.txt)
+执行环境: D:\ai-video-pipeline  (Windows / win32 / PowerShell 5.1)
+项目类型: AI 视频流水线（Python 栈）
+
+================================================================================
+0. 执行摘要
+================================================================================
+
+Phase F 已在仓库内处于"已完成"状态（scripts/vlm_config.py 存在、.env 存在、
+.gitignore 含 .env、10 个 VLM 脚本全部走 vlm_config 导入、零硬编码 sk- 明文）。
+本次任务（再次要求 phase F）执行的是"完整再验证 + 刷新 report"。
+
+验证矩阵（6/6 全部通过）：
+  [AC1.1] .env VLM_API_KEY 与任务书完全一致（67 字符，bit-exact 匹配）
+  [AC1.2] .env VLM_API_URL / VLM_MODEL 与任务书一致
+  [AC2]   .gitignore 第 6 行包含 .env
+  [AC3]   python scripts/vlm_config.py  exit=0，三组常量全部读到
+  [AC4]   scripts/*.py 零处硬编码 sk- / opencode.ai / 硬编码 MODEL
+  [AC5]   10 个目标 VLM 脚本全部 from vlm_config import API_KEY, API_URL, MODEL
+  [AC6]   cut_point_review.py 重跑 → 两切点 vlm_unavailable=False、无 429
+
+后续维护一句话：换 key / 换模型 = 改 D:\ai-video-pipeline\.env 一行。
+
+================================================================================
+1. 问题陈述（与任务书一致）
+================================================================================
+
+改动前 10 个 scripts/*.py 文件硬编码 VLM 配置（API_KEY / API_URL / MODEL）：
+  - p5_final_check.py        → MODEL="qwen3.8-max"
+  - p5_v2_frame_review.py    → MODEL="qwen3.8-max"
+  - p5_v4_frame_review.py    → MODEL="qwen3.8-max"
+  - p5_v4_video_review.py    → MODEL="qwen3.8-max"
+  - p5_v4_final_check.py     → MODEL="qwen3.8-max"
+  - p5_v5_frame_review.py    → MODEL="qwen3.8-max"
+  - p5_v5_video_review.py    → MODEL="qwen3.8-max"
+  - p5_v5_final_check.py     → MODEL="qwen3.8-max"
+  - p5_vlm_review.py         → MODEL="qwen3.8-max"
+  - r2v_review.py            → MODEL="minimax-m3"  （MODEL 不同，但 KEY/URL 一致）
+
+副作用：
+  - 换 key 要改 10 处，漏一处就 GoUsageLimitError（429）
+  - 9 个脚本 MODEL 锁死在 qwen3.8-max，无法统一切到 minimax-m3
+  - key 明文散落在 10 个文件里，泄漏面大
+
+================================================================================
+2. 改动清单（落实状态）
+================================================================================
+
+新增（untracked，对比任务书阶段 1-3）:
+  ?? scripts/vlm_config.py          ← 统一配置入口（stdlib-only）
+  ?? .env                           ← VLM_* / CHAT_* 6 行（gitignored）
+
+修改（modified，对比任务书阶段 2、4）:
+  M  .gitignore                     ← 新增 .env 行（key 不入库）
+  M  scripts/p5_final_check.py      ← 硬编码 3 行 → 1 行 from vlm_config import
+  M  scripts/p5_v2_frame_review.py
+  M  scripts/p5_v4_frame_review.py
+  M  scripts/p5_v4_video_review.py
+  M  scripts/p5_v4_final_check.py
+  M  scripts/p5_v5_frame_review.py
+  M  scripts/p5_v5_video_review.py
+  M  scripts/p5_v5_final_check.py
+  M  scripts/p5_vlm_review.py
+  M  scripts/r2v_review.py
+
+未触碰:
+  - 任何脚本业务逻辑（按硬约束；下游调用 API_URL/API_KEY/MODEL 三个名字全部保留）
+  - 任何 git 操作（按硬约束未执行 init / config / push / commit）
+  - 任何第三方依赖（未安装 python-dotenv）
+
+每个被修改脚本的精确改动（按既有的 3 行硬编码块 → 1 行 import）：
+  - 删除:
+      API_URL = "https://opencode.ai/zen/go/v1/chat/completions"
+      API_KEY = "sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr"
+      MODEL   = "qwen3.8-max"   # 或 "minimax-m3"（r2v_review.py）
+  - 替换为:
+      from vlm_config import API_KEY, API_URL, MODEL
+        # 统一 VLM 配置入口（Phase F）
+
+================================================================================
+3. scripts/vlm_config.py 设计
+================================================================================
+
+3.1 设计目标
+  - 单文件、单 import，依赖仅 Python 标准库（os / sys / pathlib）
+  - 三层兜底解析：进程环境变量 → .env 文件 → 默认值
+  - 提供 self-test：`python scripts/vlm_config.py` 一行验证
+  - API_KEY 输出脱敏（前 6 + 后 2，中间 *），避免日志意外泄漏
+  - 兼容 layers（Phase F 兼容层 + Phase F2 双分组：本任务书要求 API_KEY/API_URL/MODEL）
+
+3.2 路径解析
+  - _SCRIPT_DIR = Path(__file__).resolve().parent
+  - _REPO_ROOT  = _SCRIPT_DIR.parent          → D:\ai-video-pipeline
+  - _ENV_PATH   = _REPO_ROOT / ".env"         → D:\ai-video-pipeline\.env
+
+3.3 .env 解析（手写，stdlib-only）
+  - 按行 splitlines()，strip 后 partition('=', 1)（避免 value 内的 '=' 被破坏）
+  - 容忍成对 ' 或 " 包裹（_strip_quotes）
+  - 忽略空行 / 行首 # / 整行 # 开头注释
+  - KEY 重名后者覆盖前者（与 python-dotenv 行为一致）
+  - 解析失败仅打印 WARN（一个格式瑕疵不拖垮脚本启动）
+  - 文件不存在 → 返回空 dict，触发 env var → 默认值 兜底链
+
+3.4 _resolve 优先级链
+  def _resolve(name, default, file_values):
+      val = os.environ.get(name)              # 1. 进程环境变量
+      if val not in (None, ""): return val
+      val = file_values.get(name)             # 2. .env
+      if val not in (None, ""): return val
+      return default                          # 3. 兜底默认
+
+3.5 暴露常量
+  VLM_API_KEY / VLM_API_URL / VLM_MODEL      ← Phase F2 显式前缀（视觉）
+  CHAT_API_KEY / CHAT_API_URL / CHAT_MODEL    ← Phase F2 显式前缀（文本，预留）
+  API_KEY / API_URL / MODEL                  ← Phase F 兼容别名（=VLM 组，等价指针）
+
+3.6 _mask_key 脱敏
+  - len <= 8 → "前2***后2"
+  - len >  8 → "前6 + (len-8) 个 * + 后2"
+  - 实际输出：sk-VxL + 59 个 * + Zr（len=67）
+
+3.7 self-test 实测输出
+  $ python scripts\vlm_config.py
+    [vlm_config] repo_root    = D:\ai-video-pipeline
+    [vlm_config] env_path     = D:\ai-video-pipeline\.env  (exists=True)
+    [vlm_config] VLM_API_KEY  = sk-VxL***********************************************************Zr  (len=67)
+    [vlm_config] VLM_API_URL  = https://opencode.ai/zen/go/v1/chat/completions
+    [vlm_config] VLM_MODEL    = minimax-m3
+    [vlm_config] CHAT_API_KEY = sk-VxL***********************************************************Zr  (len=67)
+    [vlm_config] CHAT_API_URL = https://opencode.ai/zen/go/v1/chat/completions
+    [vlm_config] CHAT_MODEL   = minimax-m3
+    [vlm_config] API_KEY      = sk-VxL***********************************************************Zr  (len=67)
+    [vlm_config] API_URL      = https://opencode.ai/zen/go/v1/chat/completions
+    [vlm_config] MODEL        = minimax-m3
+  Exit code = 0
+
+================================================================================
+4. .env 文件内容（实际写入 D:\ai-video-pipeline\.env）
+================================================================================
+
+  VLM_API_KEY=sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr
+  VLM_API_URL=https://opencode.ai/zen/go/v1/chat/completions
+  VLM_MODEL=minimax-m3
+  CHAT_API_KEY=sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr
+  CHAT_API_URL=https://opencode.ai/zen/go/v1/chat/completions
+  CHAT_MODEL=minimax-m3
+
+  - 共 6 行：VLM_* 3 行 + CHAT_* 3 行
+  - VLM_API_KEY 与任务书完全一致（67 字符，前缀 sk-VxLh，后缀 NCZr，bit-exact）
+  - VLM_API_URL / VLM_MODEL 与任务书完全一致
+  - CHAT_* 组是 Phase F2 的预留（与 VLM_* 当前值相同；后续可独立切换）
+
+================================================================================
+5. .gitignore 改动（diff 视角）
+================================================================================
+
+  diff --git a/.gitignore b/.gitignore
+  @@ -3,3 +3,4 @@ __pycache__/
+   *.pyc
+   .pytest_cache/
+   *.log
+   output/
+  +.env
+
+实际文件内容（cat .gitignore 等价）：
+  __pycache__/
+  *.pyc
+  .pytest_cache/
+  *.log
+  output/
+  .env                  ← 第 6 行
+
+================================================================================
+6. 验证结果（对应 4 条验收标准 + 额外 2 项自检）
+================================================================================
+
+[AC1] vlm_config.py 能读到 .env 的三个值
+  ✅ 实际命令:  python scripts/vlm_config.py
+     exit=0
+     输出:
+       env_path = D:\ai-video-pipeline\.env  (exists=True)
+       VLM_API_KEY = sk-VxL***Zr  (len=67)
+       VLM_API_URL = https://opencode.ai/zen/go/v1/chat/completions
+       VLM_MODEL   = minimax-m3
+     兼容别名同步:
+       API_KEY = sk-VxL***Zr  (len=67)
+       API_URL = https://opencode.ai/zen/go/v1/chat/completions
+       MODEL   = minimax-m3
+
+[AC2] scripts/*.py 不再有硬编码的 API key 明文
+  ✅ 三组硬编码扫描（脚本侧）:
+     (a) grep -rE 'sk-[A-Za-z0-9_-]{30,}' scripts/*.py
+         → 0 matches
+     (b) grep -rE '^API_KEY\s*=\s*["'\'']sk-' scripts/*.py
+         → 0 matches
+     (c) grep -rE '^API_URL\s*=\s*["'\'']https' scripts/*.py
+         → 0 matches
+     (d) grep -rE '^MODEL\s*=\s*["'\''](qwen3\.8-max|minimax-m3)' scripts/*.py
+         → 0 matches
+
+  说明：vlm_config.py 内部 _DEFAULT_API_URL / _DEFAULT_MODEL 仍是字符串字面量，
+        这些是"默认兜底"，不是硬编码；只有 .env 缺失且环境变量也缺失才会落到默认。
+        没有真实 sk- key 出现在任何 scripts/*.py 文件里。
+
+[AC3] cut_point_review.py 重跑 VLM 正常（vlm_unavailable=false）
+  ✅ 实际命令:
+     python scripts/cut_point_review.py ^
+       --video output\out\final_v6.mp4 ^
+       --storyboard examples\sample_storyboard.json
+     exit=1（脚本本身的 exit；非配置问题，是切点本身的问题）
+
+  cut_1 @ 5.167s（shot1 → shot2）:
+    vlm_unavailable = false
+    vlm.score       = 62
+    vlm.visual_jump = true  (moderate 色温变化 + 场景切换)
+    vlm.subtitle_occlusion = false
+    vlm.text_clear  = true
+    audio.cliff     = false
+    → pass=False
+
+  cut_2 @ 10.333s（shot2 → shot3）:
+    vlm_unavailable = false
+    vlm.score       = 50
+    vlm.visual_jump = true  (moderate 室内→室外硬切)
+    vlm.subtitle_occlusion = false
+    vlm.text_clear  = true
+    audio.cliff     = true  (17.2 dB 音频断崖)
+    → pass=False
+
+  总结:
+    ✅ 两处 cut_point 都拿到完整 VLM JSON（visual_jump / subtitle_occlusion /
+       text_clear / score / opinion / raw 思考链）
+    ✅ vlm_unavailable 均为 false（无 429 / 无 401 / 无 GoUsageLimitError）
+    ✅ JSON 报告中 "model": "minimax-m3"  ← 来自 vlm_config.MODEL
+    ✅ Markdown 报告生成: D:\ai-video-pipeline\output\cut_point_report.md
+    ✅ JSON 报告生成:    D:\ai-video-pipeline\output\cut_point_review.json
+    ⚠️ overall.pass = false 是因为切点本身的问题（视觉跳跃 moderate +
+       cut_2 音频断崖 17.2 dB），与本次配置重构无关
+
+  额外 VLM 烟雾测试（不依赖 cut_point_review，直接打 API）：
+  ✅ http_status=200, content_len=220
+     content_preview='<think>...</think>\n\nPong! ...'
+     证明：vlm_config 提供的 API_KEY 在 opencode.ai/zen 端鉴权通过 +
+           当前模型（minimax-m3）接入正常 + 无 429 限流。
+
+[AC4] .gitignore 含 .env
+  ✅ cat .gitignore: 第 6 行 .env
+  ✅ git check-ignore -v .env（如果 git 在场）应报 .gitignore:6:.env（已 gitignored）
+
+================================================================================
+7. 硬约束自检（任务书第 39-44 行）
+================================================================================
+
+  ✅ 不引入第三方依赖：
+     vlm_config.py 仅 import os / sys / pathlib + __future__，全部为标准库；
+     现有项目依赖未变（pip 列表无新增）。
+
+  ✅ 不改任何脚本的业务逻辑：
+     仅把 10 个脚本的 3 行字符串字面量替换为 1 行 from vlm_config import ...；
+     下游 API_URL / API_KEY / MODEL 三个名字在所有调用点原样保留，零改动。
+     cut_point_review.py / filmstrip.py / overlays.py 等所有非 VLM 脚本未触碰。
+
+  ✅ 不 git init / config / push：
+     未执行任何 git 写操作；仅在 read-only 视角校验 .gitignore 行。
+     git push / commit 留给用户。
+
+  ✅ 所有读写路径都在 D:\ai-video-pipeline 内：
+     全部验证脚本和临时文件均位于 D:\ai-video-pipeline\ 下，
+     无 E:\App\Conda外部 prefix 写入，无 C:\Users\shrine 写操作；
+     .env 路径 = project_root / .env（项目内）。
+
+  ✅ .env 的 key 与任务书完全一致：
+     长度 67、前缀 sk-VxLh、后缀 NCZr，bit-exact 匹配；未做任何字符级修改。
+
+================================================================================
+8. 后续维护指引（给运维 / 后续 phase）
+================================================================================
+
+换 key / 换模型 = 改 D:\ai-video-pipeline\.env 一行，不动任何脚本：
+
+  换 API key  :  VLM_API_KEY=sk-...
+  换 LLM 端点 :  VLM_API_URL=https://...
+  换模型     :  VLM_MODEL=minimax-m3   (或 qwen3.8-max / 任意可用模型名)
+  CI / 容器里 :  通过环境变量 VLM_API_KEY / VLM_API_URL / VLM_MODEL 覆盖
+                 （os.environ 优先级高于 .env，无需写文件）
+
+新增 VLM 脚本只需在文件顶部加：
+    from vlm_config import API_KEY, API_URL, MODEL
+即可与所有现有脚本共用同一份配置，杜绝再次出现"10 处硬编码"的历史复发。
+
+================================================================================
+9. 附：本次回归验证运行的临时产物（已清理）
+================================================================================
+
+  - pF_vlmcfg.log     (vlm_config.py self-test 输出，已删)
+  - pF_smoketest.py   (直接 VLM 烟雾测试脚本，已删)
+  - pF_smoketest.log  (烟雾测试输出，已删)
+  - pF_run_new.log    (cut_point_review.py 重跑 log，已删)
+  - output/cut_point_review.json  (本次 cut_point_review 重跑产出，保留作 AC3 证据)
+  - output/cut_point_report.md    (本次 cut_point_review 重跑产出，保留作 AC3 证据)
+
+================================================================================
+报告结束
+================================================================================

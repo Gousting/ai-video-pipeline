@@ -171,3 +171,161 @@ VLM 明确指出「四帧…保持一致…无明显漂移或闪现」——这�
 - ✏️ `D:\ai-video-pipeline\scripts\r2v_review.py`（追加 ~60 行：常量 / 函数 / CLI；MODEL 单值改动）
 - ➕ `D:\ai-video-pipeline\output\tmp\filmstrip_2x2.png` / `.jpg` / `filmstrip_1x3.png` / `filmstrip_1x6.png`（自测产物）
 - ➕ `D:\ai-video-pipeline\pA_report.txt`（本文）
+
+---
+
+## 6. 复跑复核（2026-08-18，Backend Architect minimax-m3）
+
+接手同一份任务书（`oc_task_a_filmstrip.txt`）后，按任务书验收标准逐条**重新执行**，所有
+证据来自本次会话的真实命令输出，而非沿用上一次的旧日志。
+
+### 6.1 环境快照
+| 项 | 值 |
+|---|---|
+| Pillow | 12.0.0 |
+| requests | 2.32.5 |
+| ffmpeg | 8.1.2-full_build-www.gyan.dev |
+| `.env` 内 `VLM_MODEL` | `minimax-m3` |
+| `vlm_config.py` 默认 `_DEFAULT_MODEL` | `minimax-m3` |
+| `r2v_review.py` 当前 `MODEL` 引入方式 | `from vlm_config import API_KEY, API_URL, MODEL`（已统一换模型，**不是**直接写字面量 `qwen3.8-max`） |
+
+### 6.2 验收标准 §1 — filmstrip.py 自测产物
+
+`python D:\ai-video-pipeline\scripts\filmstrip.py` 真实输出：
+
+```json
+{
+  "ok": true,
+  "out_dir": "D:\\ai-video-pipeline\\output\\tmp",
+  "n4_canvas": [1472, 842],
+  "n4_png_bytes": 50013,
+  "n4_jpg_bytes": 90837,
+  "n4_b64_bytes": 121116,
+  "n3_canvas": [1536, 304],
+  "n3_png_bytes": 82219,
+  "n6_canvas": [1536, 161],
+  "n6_png_bytes": 74786
+}
+```
+
+四张落盘产物均存在（`output/tmp/filmstrip_2x2.{png,jpg}` + `filmstrip_1x3.png` +
+`filmstrip_1x6.png`），逐张校验：
+
+| 文件 | 尺寸 | 最长边 | 字节 | 左上 200×200 内唯一颜色数 |
+|---|---|---|---|---|
+| `filmstrip_2x2.png` | 1472×842 | **1472** ≤ 1536 ✓ | 50 013 | 49 |
+| `filmstrip_2x2.jpg` | 1472×842 | 1472 ✓ | 90 837 (**88.7 KB** ≤ 200 KB ✓) | 82 |
+| `filmstrip_1x3.png` | 1536×304 | 1536 ✓ | 82 219 | 1037 |
+| `filmstrip_1x6.png` | 1536×161 | 1536 ✓ | 74 786 | 2894 |
+
+颜色数 49 / 82 表明 2x2 左上区域不是单色 — 是「白底标签 + 黑字 + 帧内容渐变」的混合，
+确认**序号标签真实绘制**而非被填充像素吞噬。
+
+### 6.3 验收标准 §2 — review_filmstrip 真实视频端到端
+
+```bash
+python D:\ai-video-pipeline\scripts\r2v_review.py review_filmstrip \
+    --video D:\ai-video-pipeline\output\out\final_v5.mp4 \
+    --n 4 \
+    --out D:\ai-video-pipeline\output\tmp\pA_review_filmstrip_run.json
+```
+
+实际返回 JSON（已写入 `pA_review_filmstrip_run.json`）：
+
+```json
+{
+  "frame_1": 85, "frame_2": 82, "frame_3": 80, "frame_4": 83,
+  "character_consistent": true,
+  "motion_continuous": true,
+  "spatial_stable": true,
+  "consistency": "角色（黑发眼镜男、深色大衣、斜挎包）在四帧中保持一致，无漂移突变；场景从室外撑伞到店内做饭再到柜台，运镜切换自然，背景元素无明显闪烁或扭曲。",
+  "opinion": "整体画面氛围感强、雨夜夕阳光影到位、角色与场景一致性良好，是一段完成度较高的AI视频片段。",
+  "score": 84,
+  "raw": "<VLM 原文 + 推理日志>",
+  "video": "D:\\ai-video-pipeline\\output\\out\\final_v5.mp4",
+  "n": 4,
+  "pass": true
+}
+```
+
+JSON 键集合精确等于任务书契约：
+`[frame_1, frame_2, frame_3, frame_4, character_consistent, motion_continuous,
+spatial_stable, consistency, opinion, score, raw, video, n, pass]`
+
+`pass` 判定：score(84) ≥ 70 且三项一致性全部 `true` → `pass: true`。
+
+### 6.4 验收标准 §3 — 依赖约束
+
+| 依赖 | filmstrip.py | r2v_review.py |
+|---|---|---|
+| `PIL`（含 `Image / ImageDraw / ImageFont`） | ✓ | ✓ |
+| `requests` | — | ✓ |
+| `subprocess`（用于调 ffmpeg/ffprobe） | — | ✓ |
+| `ffmpeg` / `ffmpeg`-类二进制 | — | ✓ |
+| 第三方视频处理库（decord / opencv / imageio / av / …） | ❌（无） | ❌（无） |
+
+仅 stdlib (`base64` / `io` / `pathlib` / `typing` / `json` / `subprocess` / `argparse`
+/ `sys` / `time`) + Pillow + requests + 系统 ffmpeg/ffprobe。无新增第三方依赖。
+
+### 6.5 硬约束逐条核查
+- ✅ 纯 Python：仅依赖列表见 §6.4
+- ✅ `D:\ai-video-pipeline\pipeline.yaml`：本会话未读未写，md5 不变
+- ✅ `scripts/overlay.py` / `scripts/render_overlays.py` / `overlays/`：本会话未触碰
+- ✅ `scripts/r2v_video_gen.py`：本会话未触碰
+- ✅ 未 `git init`、未改任何 git 配置（`D:\ai-video-pipeline\.gitignore` 未读未写）
+- ✅ 所有读写路径均在 `D:\ai-video-pipeline\` 内（含 `output/tmp/pA_*` 自测/复核产物）
+
+### 6.6 向后兼容核查
+
+| 验证项 | 命令 | 结果 |
+|---|---|---|
+| 四子命令都在 | `r2v_review.py --help` | `{check_motion,check_char,review,review_filmstrip}` ✓ |
+| `review_filmstrip --help` | 同上 | `--video --n --ref --out` 四个参数就位 ✓ |
+| `check_char` 输出契约未变 | `check_char --image output/char/ref_front.png` | 返回 `is_anime_style / face_clear / matches_character / comment / raw` ✓ |
+| `review` 输出契约未变 | `review --video final_v5.mp4 --ref output/char/ref_half.png` | 返回 `score / character_locked / character_comment / motion_natural / motion_comment / spatial_stable / spatial_comment / opinion / raw / pass` ✓ |
+
+注：本次 `review` 调用 VLM 判定 `character_locked: false / score: 38 / pass: false` —
+理由是参考图 `ref_half.png` 是写实照片而视频是动漫输出（画风彻底转变）。这是
+**VLM 的真实判定**，恰好佐证 `review` 路径未被脚本层面绕过。
+
+### 6.7 回归测试
+
+默认调用：
+```
+$ pytest D:\ai-video-pipeline\tests -q
+26 passed, 8 errors in 1.21s
+```
+8 个 errors **全部**是 pytest 自身 tmpdir `C:\Users\shrine\AppData\Local\Temp\pytest-of-shrine`
+的 `PermissionError`，与测试逻辑无关（属于会话环境问题）。
+
+绕过默认 tmpdir 重跑：
+```
+$ pytest D:\ai-video-pipeline\tests -q \
+    --basetemp D:\ai-video-pipeline\output\tmp\pytest-basetmp
+34 passed in 0.44s
+```
+全部 34 个用例通过，**0 失败 0 跳过**。
+
+### 6.8 复核结论
+
+任务书 §验收标准 4 条 + 硬约束 6 条 + 向后兼容 4 项 + 回归 34 用例
+**全部通过**。Phase A 在本会话独立复跑下仍然成立；上一次的产物（filmstrip.py
+/ r2v_review.py / vlm_config.py / 落盘 PNG-JPG）与本次复跑结果一致。
+
+无新增改动 — 文件系统 diff 为空：
+- `scripts/filmstrip.py` — 维持 327 行原样
+- `scripts/r2v_review.py` — 维持 312 行原样
+- `scripts/vlm_config.py` — 维持 175 行原样
+- `.env` — 维持原样
+- `pipeline.yaml` / `scripts/overlay.py` / `scripts/render_overlays.py` /
+  `overlays/` / `scripts/r2v_video_gen.py` / `.gitignore` — **未触碰**
+
+复跑副产物（用于审计，路径均在 `output/tmp/`）：
+- `output/tmp/pA_review_filmstrip_run.json` — 真实 VLM 返回值存档
+- `output/tmp/pA_check_char.json` — 向后兼容调用存档
+- `output/tmp/pA_review_full.json` — 向后兼容调用存档
+
+---
+**变更文件清单（本次复跑新增）：**
+- 仅追加本文档 §6 节到 `D:\ai-video-pipeline\pA_report.txt`
+- 其余源码文件零改动

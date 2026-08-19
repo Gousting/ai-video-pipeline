@@ -1,0 +1,249 @@
+================================================================================
+Phase F2 Report: VLM / Chat 配置分组（Split VLM config into VLM_* and CHAT_*）
+================================================================================
+生成时间: 2026-08-18
+执行环境: D:\ai-video-pipeline  (Windows / win32 / PowerShell 5.1)
+承接: Phase F（统一 VLM key 配置入口）
+触发任务: C:\Users\shrine\oc_task_f2_split.txt
+
+================================================================================
+1. 问题陈述
+================================================================================
+
+Phase F 完成后 scripts/vlm_config.py 单一导出 API_KEY / API_URL / MODEL，所有
+10 个 VLM 脚本统一从此入口读取，10 处硬编码全部消除。
+
+用户需求（Phase F2 任务书）：
+
+  "后期可能用不同模型/不同 key（比如 chat 用更强的推理模型、VLM 用便宜的
+   视觉模型）。"
+
+约束：
+  - 不改任何脚本的业务逻辑
+  - 现有脚本 `from vlm_config import API_KEY` 必须继续可用（10 处 import 零改动）
+  - 不想分的时候，两组 .env 值保持相同即可
+  - 想分的时候，只改 .env 的某一组即可
+
+================================================================================
+2. 改动清单
+================================================================================
+
+修改（modified）:
+  M  .env                              ← 新增 CHAT_* 三行（值与 VLM_* 完全相同）
+  M  scripts/vlm_config.py             ← 新增 CHAT_* 导出 + 保留 API_* 兼容别名
+
+未触碰:
+  - 任何 scripts/*.py 业务逻辑（10 个 VLM 脚本的 import 一字未改）
+  - 任何 git 操作（按硬约束未执行 init / config / push）
+  - 任何第三方依赖（未安装 python-dotenv）
+
+================================================================================
+3. .env 文件内容（实际写入 D:\ai-video-pipeline\.env）
+================================================================================
+
+  VLM_API_KEY=sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr
+  VLM_API_URL=https://opencode.ai/zen/go/v1/chat/completions
+  VLM_MODEL=minimax-m3
+  CHAT_API_KEY=sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr
+  CHAT_API_URL=https://opencode.ai/zen/go/v1/chat/completions
+  CHAT_MODEL=minimax-m3
+
+  - 6 行（VLM_* 3 行 + CHAT_* 3 行）
+  - VLM_API_KEY 与任务书完全一致（67 字符、前缀 sk-VxLh、后缀 NCZr，零字符级改动）
+  - CHAT_* 三行当前值与 VLM_* 完全相同（即"先建好两槽、各填一样的"，想分就改 CHAT_*）
+  - .gitignore 已含 .env（第 6 行），不会被 git 跟踪
+
+================================================================================
+4. scripts/vlm_config.py 设计变更
+================================================================================
+
+4.1 旧版（Phase F，10 个脚本靠它活）
+  导出:  API_KEY, API_URL, MODEL
+  读取:  VLM_API_KEY / VLM_API_URL / VLM_MODEL（隐式 VLM 前缀，未显式声明）
+
+4.2 新版（Phase F2，向上兼容 + 双组导出）
+  显式分组（用户可见的命名空间）:
+    VLM_API_KEY  / VLM_API_URL  / VLM_MODEL    ← 视觉审查用
+    CHAT_API_KEY / CHAT_API_URL / CHAT_MODEL   ← 文本对话用（预留）
+  兼容别名（= VLM 组，等价指针，三行代码）:
+    API_KEY = VLM_API_KEY
+    API_URL = VLM_API_URL
+    MODEL   = VLM_MODEL
+  读取:
+    os.environ.get("VLM_API_KEY"...)  > .env > 默认值     ← VLM 组
+    os.environ.get("CHAT_API_KEY"...) > .env > 默认值     ← CHAT 组
+
+4.3 关键代码片段
+
+  # VLM 组
+  VLM_API_KEY = _resolve("VLM_API_KEY", _DEFAULT_API_KEY, _file_values)
+  VLM_API_URL = _resolve("VLM_API_URL", _DEFAULT_API_URL, _file_values)
+  VLM_MODEL   = _resolve("VLM_MODEL",   _DEFAULT_MODEL,   _file_values)
+
+  # CHAT 组
+  CHAT_API_KEY = _resolve("CHAT_API_KEY", _DEFAULT_API_KEY, _file_values)
+  CHAT_API_URL = _resolve("CHAT_API_URL", _DEFAULT_API_URL, _file_values)
+  CHAT_MODEL   = _resolve("CHAT_MODEL",   _DEFAULT_MODEL,   _file_values)
+
+  # 兼容别名（10 个现存脚本 import 用的）
+  API_KEY = VLM_API_KEY
+  API_URL = VLM_API_URL
+  MODEL   = VLM_MODEL
+
+4.4 self-test 升级（输出三段：VLM / CHAT / 兼容别名）
+  $ python scripts\vlm_config.py
+    [vlm_config] repo_root    = D:\ai-video-pipeline
+    [vlm_config] env_path     = D:\ai-video-pipeline\.env  (exists=True)
+
+    [vlm_config] --- VLM 组（视觉审查）---
+    [vlm_config] VLM_API_KEY  = sk-VxL***...***Zr  (len=67)
+    [vlm_config] VLM_API_URL  = https://opencode.ai/zen/go/v1/chat/completions
+    [vlm_config] VLM_MODEL    = minimax-m3
+
+    [vlm_config] --- CHAT 组（文本对话，预留）---
+    [vlm_config] CHAT_API_KEY = sk-VxL***...***Zr  (len=67)
+    [vlm_config] CHAT_API_URL = https://opencode.ai/zen/go/v1/chat/completions
+    [vlm_config] CHAT_MODEL   = minimax-m3
+
+    [vlm_config] --- 兼容别名（= VLM 组；10 个现存脚本 import 用）---
+    [vlm_config] API_KEY      = sk-VxL***...***Zr  (len=67)
+    [vlm_config] API_URL      = https://opencode.ai/zen/go/v1/chat/completions
+    [vlm_config] MODEL        = minimax-m3
+  exit = 0
+
+4.5 第三方依赖: 0 个（仍只 import os / sys / pathlib）
+
+================================================================================
+5. 验证结果（对应 4 条验收标准）
+================================================================================
+
+[AC1] vlm_config.py 导出 VLM_* 和 CHAT_* 两组，且 API_KEY/API_URL/MODEL 别名仍可用
+  ✅ self-test 三段输出齐全（见 4.4 节）
+  ✅ importlib 加载 vlm_config 模块本身，确认 9 个常量全部就位:
+       VLM_API_KEY, VLM_API_URL, VLM_MODEL,
+       CHAT_API_KEY, CHAT_API_URL, CHAT_MODEL,
+       API_KEY, API_URL, MODEL
+  ✅ 别名等价性验证（vlm_config 模块内）:
+       API_KEY is VLM_API_KEY    → True（同一字符串对象）
+       API_URL is VLM_API_URL    → True
+       MODEL   is VLM_MODEL      → True
+  ✅ 单行 import 9 个常量也能正确解析:
+       from vlm_config import VLM_API_KEY, VLM_API_URL, VLM_MODEL, \
+                              CHAT_API_KEY, CHAT_API_URL, CHAT_MODEL, \
+                              API_KEY, API_URL, MODEL
+       → import 成功，无 ImportError
+
+[AC2] 现有脚本零改动（不用改 import）也能正常跑
+  ✅ grep 验证 — 所有 from vlm_config import 行仍是 API_KEY/API_URL/MODEL:
+       p5_final_check.py:21         from vlm_config import API_KEY, API_URL, MODEL
+       p5_v2_frame_review.py:23     from vlm_config import API_KEY, API_URL, MODEL
+       p5_v4_final_check.py:26      from vlm_config import API_KEY, API_URL, MODEL
+       p5_v4_frame_review.py:25     from vlm_config import API_KEY, API_URL, MODEL
+       p5_v4_video_review.py:32     from vlm_config import API_KEY, API_URL, MODEL
+       p5_v5_final_check.py:27      from vlm_config import API_KEY, API_URL, MODEL
+       p5_v5_frame_review.py:27     from vlm_config import API_KEY, API_URL, MODEL
+       p5_v5_video_review.py:32     from vlm_config import API_KEY, API_URL, MODEL
+       p5_vlm_review.py:24          from vlm_config import API_KEY, API_URL, MODEL
+       r2v_review.py:33             from vlm_config import API_KEY, API_URL, MODEL
+       → 10/10 一字未改
+
+  ✅ cut_point_review.py 间接走 import r2v_review → vlm_config（cut_point 不
+       直接 import vlm_config 但透过 r2v_review 复用 chat()，所以也走兼容
+       别名路径）
+
+  ✅ 业务逻辑零改动检查（grep 反向校验）:
+       scripts/ 下任何 .py 硬编码 sk- key        → 0 matches
+       scripts/ 下任何 .py 硬编码 sk-VxL 前缀    → 0 matches
+       硬编码 API_KEY / API_URL / MODEL 顶层赋值   → 0 matches
+
+[AC3] cut_point_review.py 重跑 VLM 正常（vlm_unavailable=false）
+  ✅ 实际命令:
+       python scripts/cut_point_review.py ^
+         --video output\out\final_v6.mp4 ^
+         --storyboard examples\sample_storyboard.json
+
+  ✅ cut_point JSON 摘要（output/cut_point_review.json）：
+       model in meta: minimax-m3
+       cut_1: id=cut_1 position=5.167s score=None pass=False
+         vlm_unavailable = False
+         visual_jump    = True
+         subtitle       = None
+         text_clear     = True
+       cut_2: id=cut_2 position=10.333s score=None pass=False
+         vlm_unavailable = False
+         visual_jump    = True
+         subtitle       = None
+         text_clear     = True
+       VLM unavailable: 0/2  -> PASS
+
+  ✅ MODEL 解析路径：cut_point_review → r2v_review.chat() → vlm_config.MODEL
+       (= VLM_MODEL via alias) → minimax-m3（与 .env 一致）
+
+  ✅ overall.pass = False（cut_point 本身的判定问题：cut_2 音频断崖
+       audio.cliff=True，视觉跳跃 moderate；与本次配置重构无关，复现
+       Phase F 同一切点结果）
+
+[AC4] 以后想分开：只需改 .env 里的 CHAT_* 或 VLM_*，或把某组指向不同 URL/model
+  ✅ 设计已就绪:
+       - VLM_API_KEY / VLM_API_URL / VLM_MODEL     三行在 .env 顶部
+       - CHAT_API_KEY / CHAT_API_URL / CHAT_MODEL  三行在 .env 底部
+       - 两组独立解析（同名独立 key 槽，互不干扰）
+       - CI / 容器覆盖: 环境变量优先级高于 .env
+            VLM_API_KEY=xxx python scripts/X.py    → VLM 组用 xxx
+            CHAT_API_KEY=yyy python scripts/Y.py   → CHAT 组用 yyy（未来脚本）
+  ✅ 使用示例（README/维护文档指引）:
+       "想给 chat 换更强的推理模型":
+         编辑 .env，把 CHAT_MODEL=minimax-m3 改成 CHAT_MODEL=qwen3.8-max
+         （如果也想换 key，把 CHAT_API_KEY 同步替换）
+       "想给 VLM 换便宜的视觉模型":
+         编辑 .env，把 VLM_MODEL=minimax-m3 改成 VLM_MODEL=gpt-4o-mini-vision
+       "给 chat 配独立 key（限速分流）":
+         编辑 .env，给 CHAT_API_KEY 一个新的 sk-xxx；现有 10 个 VLM 脚本
+         自动继续用 VLM_API_KEY，零改动。
+
+================================================================================
+6. 硬约束自检
+================================================================================
+
+  ✅ 不引入第三方依赖: vlm_config.py 仅用 os / sys / pathlib，全为标准库
+  ✅ 不改任何脚本的业务逻辑: 仅修改 vlm_config.py 和 .env 两文件；10 个 VLM
+     脚本的 import 行一字未改
+  ✅ 不要 git init / 不要 git config / 不要自己 push: 全程未执行任何 git 写
+     操作（仅 git status 读）
+  ✅ 所有读写路径都在 D:\ai-video-pipeline 内: 未触及其它盘符或外部目录
+  ✅ .env 的 VLM_API_KEY 必须保持任务书原值:
+     字节级匹配 `VLM_API_KEY=sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr`
+     （前缀 sk-VxLh，后缀 NCZr，len=67）
+
+================================================================================
+7. 后续维护指引
+================================================================================
+
+7.1 想给 chat 换独立模型 / 独立 key
+   编辑 D:\ai-video-pipeline\.env，把 CHAT_MODEL / CHAT_API_KEY 改成新值。
+   现有 10 个 VLM 脚本自动继续用 VLM 组（API_KEY/API_URL/MODEL 别名指向 VLM_*），
+   无需触碰任何代码。
+
+7.2 未来新增 chat 脚本（文本对话类）
+   在文件顶部加:
+     from vlm_config import CHAT_API_KEY, CHAT_API_URL, CHAT_MODEL
+   与现有 10 个 VLM 脚本的 import 互不干扰。
+
+7.3 想给 VLM 也换独立模型 / 独立 key
+   编辑 .env 的 VLM_* 三行即可（10 个现存脚本自动跟随）。
+
+7.4 CI / 容器里覆盖某组
+   通过环境变量（优先级高于 .env）:
+     export VLM_API_KEY=...   # VLM 组用此值
+     export CHAT_API_KEY=...  # CHAT 组用此值
+     python scripts/X.py
+   无需修改 .env 文件。
+
+7.5 想完全废弃兼容别名（API_KEY/API_URL/MODEL）
+   把 10 个脚本的 import 改成 VLM_*，并在 vlm_config.py 删除那 3 行别名赋值。
+   这是 Phase G 之后再考虑的事 — Phase F2 的核心交付是"零改动平滑过渡"，
+   别名是这道护栏。
+
+================================================================================
+报告结束
+================================================================================

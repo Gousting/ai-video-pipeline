@@ -3,46 +3,39 @@ Phase E · 切点自评估（cut_point_review.py）成片自测报告
 
 执行环境
 --------
-- OS: Windows 11 (PowerShell 5.1)
+- OS: Windows 11（PowerShell 5.1）
 - 工作目录: D:\ai-video-pipeline
 - Python: 3.13.9
 - ffmpeg / ffprobe: Gyan.FFmpeg 8.1.2
-- requests / Pillow: 已安装
-- VLM: scripts\r2v_review.py 复用（MODEL = minimax-m3）
-- filmstrip: scripts\filmstrip.py 复用
+- 依赖: requests / Pillow（已安装）
+- VLM: 复用 scripts\r2v_review.py（MODEL = minimax-m3，API_URL 走 .env）
+- filmstrip: 复用 scripts\filmstrip.py 的 filmstrip() / filmstrip_b64() / _compress_to_kb()
 
 
 本阶段目标
 ----------
-Phase A→D 之后 output\out\final_v6.mp4 是 15.5s 的最终成片（含片头标题卡 / 三段字幕 /
-片尾卡 + 配音 + 钢琴 + 底噪）。之前只有"内容合规 gate"（content-rules），没有成片级
-"视觉连续性"评估。本阶段新增 scripts\cut_point_review.py：对每个 shot 切点做视觉
-（视觉跳跃 / 字幕遮挡 / 文字清晰）和音频（RMS 断崖）双轨评估，输出 Markdown 报告，
-作为 final 阶段的成片验收 gate。
+Phase A→D 后 output\out\final_v6.mp4 是 15.5s 的最终成片（片头标题卡 / 三段字幕 / 片尾卡
++ 配音 + 钢琴 + 底噪）。原来只有"内容合规 gate"（content-rules），没有成片级"视觉连续性"
+评估。本阶段新增 scripts\cut_point_review.py：对每个 shot 切点做视觉（视觉跳跃 / 字幕遮挡
+/ 文字清晰）和音频（RMS 断崖）双轨评估，输出 Markdown 报告，作为 final 阶段的成片验收 gate。
 
 
 新增 / 改了什么
 ----------------
 新增文件（Phase E 产物）：
-  scripts\cut_point_review.py                      Phase E 主脚本（成片切点自评估）
-  output\cut_point_review.json                     2 个切点的完整 JSON（数字 / VLM / audio）
-  output\cut_point_report.md                       Markdown 报告（汇总表 + 每点详情 + 方法）
-  output\cut_point_review\cut_1\                  cut_1 抽帧 + filmstrip
-    before_1_+4.667s.jpg / before_2_+4.867s.jpg / before_3_+5.067s.jpg
-    after_1_+5.267s.jpg  / after_2_+5.467s.jpg  / after_3_+5.667s.jpg
-    filmstrip.png  (1536×161) / filmstrip.jpg (~70KB)
-  output\cut_point_review\cut_2\                  cut_2 抽帧 + filmstrip
-    before_1_+9.833s.jpg / before_2_+10.033s.jpg / before_3_+10.233s.jpg
-    after_1_+10.433s.jpg / after_2_+10.633s.jpg / after_3_+10.833s.jpg
-    filmstrip.png  (1536×161) / filmstrip.jpg (~74KB)
-  output\cut_point_review\_audio_tmp\             astats 中间 wav（每次评估后自动 unlink 清理）
+  scripts\cut_point_review.py                        # 切点自评估主脚本（import filmstrip / r2v_review）
+  output\cut_point_review.json                       # 2 个 cut_point 的完整结构化结果
+  output\cut_point_report.md                         # 报告（Markdown 表格 + 每切点详情 + Method）
+  output\cut_point_review\cut_1\...                  # cut_1 抽帧（before×3 + after×3）+ filmstrip.png/jpg
+  output\cut_point_review\cut_2\...                  # cut_2 抽帧 + filmstrip.png/jpg
+  output\cut_point_review_run.log                    # 本次实跑子进程日志
 
 未触碰（按硬约束）：
-  scripts\filmstrip.py, scripts\r2v_review.py     Phase A 产物（import 调用，零修改）
-  scripts\overlay.py, scripts\render_overlays.py, overlays\*  Phase B 产物
-  scripts\compose_final.py                        Phase C 产物
-  scripts\p5_v6_audio.py                           Phase D 产物
-  pipeline.yaml                                    阶段配置不动
+  scripts\filmstrip.py, scripts\r2v_review.py         # Phase A 产物（import 调用，零修改）
+  scripts\overlay.py, scripts\render_overlays.py, overlays\*  # Phase B 产物
+  scripts\compose_final.py                           # Phase C 产物
+  scripts\p5_v6_audio.py                             # Phase D 产物
+  pipeline.yaml                                      # 阶段配置不动
 
 
 设计要点
@@ -58,98 +51,74 @@ CLI：
         [--no-vlm]
 
 输入：
-- --video <mp4>           最终成片
-- --storyboard <json>     storyboard.json（用 shots[].duration 算 start_time）
-- 可选：--out / --json-out / --frames-dir / --n-frames
+  --video <mp4>           最终成片
+  --storyboard <json>     storyboard.json（用 shots[].duration 推 start_time）
+  可选：--out / --json-out / --frames-dir / --n-frames / --no-vlm
 
 shot 边界解析（parse_shot_boundaries）：
-1. storyboard.shots[i].start_time 全有 → 直接用
-2. 否则按 duration 累加：shot[i].start = sum(shot[j].duration for j<i)
-3. storyboard 总时长 vs ffprobe 视频总时长：
-   - 不一致 → 按比例缩放保持相对比例（实测 15.0s → 15.5s，scale=1.0333）
-4. 末 shot.end 钉到 video duration（避免越界）
+  1. storyboard.shots[i].start_time 全有 → 直接用
+  2. 否则按 duration 累加：shot[i].start = Σ(shot[j].duration for j<i)
+  3. 与 ffprobe 视频总时长不一致 → 按比例缩放（实测 15.0s → 15.5s，scale=1.0333）
+  4. 末 shot.end 钉到 video duration
 
 抽帧策略（每个切点 ±0.5s 各 3 帧 = 6 帧）：
-- BEFORE_OFFSETS = (-0.50, -0.30, -0.10) → 切点前 3 帧
-- AFTER_OFFSETS  = (+0.10, +0.30, +0.50) → 切点后 3 帧
-- 切点时刻本身（offset=0）不抽，避免重复帧
-- ffmpeg -ss <t> -i <video> -frames:v 1 -q:v 3 -y out.jpg（per-frame 抽帧）
+  BEFORE_OFFSETS = (-0.50, -0.30, -0.10) → 切点前 3 帧
+  AFTER_OFFSETS  = (+0.10, +0.30, +0.50) → 切点后 3 帧
+  切点时刻本身（offset=0）不抽，避免重复帧
+  ffmpeg -ss <t> -i <video> -frames:v 1 -q:v 3 -y out.jpg
 
-filmstrip 合成（不重写，import 复用）：
-- import filmstrip as _fs
-- _fs.filmstrip(frames, labels=True) → 6 帧 1x6 横向合成图
-- 存 PNG（无损，便于人工复核）+ JPEG（≤300KB，便于报告内嵌）
-- 长边 thumbnail 至 ≤1536（与 filmstrip.py 默认值一致）
+filmstrip 合成（import 调用，零修改）：
+  import filmstrip as _fs
+  _fs.filmstrip(frames, labels=True) → 6 帧 1x6 横向合成图
+  存 PNG（无损，便于人工复核）+ JPEG（≤300KB，用 filmstrip._compress_to_kb 压缩）
 
-VLM 审查（不重写 HTTP，import 复用）：
-- import r2v_review as _r2v
-- _fs.filmstrip_b64(frames, labels=True, target_kb=200, prefix=True)
-  → data:image/jpeg;base64,...（已带 data: 前缀，可直接喂 OpenAI 兼容 API）
-- _r2v.chat([{"role":"user","content": [...]}], attempts=1) → VLM 调用
-  注：默认 attempts=4 + 180s 超时 + backoff 在 429 配额耗尽时会卡 12+ 分钟；
-     按 cut point 评估需要稳定时长（2 cut × 12min 起步），故显式传 attempts=1
-     走"快速失败"，把降级决策交给上层。HTTP 调用仍由 r2v_review.chat 发起，未重写。
-- _r2v.parse_json(raw) → 解析 VLM 响应 JSON
-- MODEL = _r2v.MODEL = "minimax-m3"（与 Phase A 完全一致）
-- VLM Prompt：要求返回 JSON {visual_jump, visual_jump_severity,
-  visual_jump_comment, subtitle_occlusion, subtitle_occlusion_comment,
-  text_clear, text_clear_comment, score, opinion}
+VLM 审查（import 调用，零重写 HTTP）：
+  import r2v_review as _r2v
+  _fs.filmstrip_b64(frames, labels=True, target_kb=200, prefix=True)
+      → data:image/jpeg;base64,...（已带 data: 前缀，可直接喂 OpenAI 兼容 API）
+  _r2v.chat([{"role":"user","content":content}], attempts=1)
+      → MINIMAX-M3（MODEL = minimax-m3，API_URL 从 .env 读）
+      → 解析返回 JSON {visual_jump, visual_jump_severity, visual_jump_comment,
+        subtitle_occlusion, subtitle_occlusion_comment, text_clear, text_clear_comment,
+        score, opinion}
+      → parse_json() 容错：失败时回到默认 safe dict，visual_* 标记为 unknown
 
-音频断裂检测（纯 ffmpeg，不依赖 VLM）：
-1. 抽 ±1s 音频段：ffmpeg -ss (T-1) -i video -t 2 -vn -ac 1 -ar 32000
-   -acodec pcm_s16le → wav（32kHz mono）
-2. astats 100ms 块：
-   ffmpeg -i seg.wav -af "asetnsamples=n=3200,
-   astats=metadata=1:reset=1,
-   ametadata=mode=print:key=lavfi.astats.Overall.RMS_level" -f null -
-   → 解析 stderr 拿到 20 个 100ms 块的 RMS_level
-3. 按切点在中段拆分：前 10 块 = pre-cut，后 10 块 = post-cut
-4. 分别算 dB 平均，|delta| ≥ 8 dB 视为断崖
-- 整段音频段处理完即 unlink 中间 wav，不污染 output/
+音频断崖检测（纯 ffmpeg，不依赖 VLM）：
+  1. ffmpeg -ss (T-1) -t 2 -vn -ac 1 -ar 32000 -acodec pcm_s16le → wav（32kHz mono）
+  2. astats 100ms 块：
+     ffmpeg -i seg.wav -af "asetnsamples=n=3200,astats=metadata=1:reset=1,
+                          ametadata=mode=print:key=lavfi.astats.Overall.RMS_level"
+     → 解析 stderr 拿到 20 块 RMS_level（dB）
+  3. 按切点在中段（1s/0.1s = 10 块）拆分为 pre / post，分别算 dB 均值
+  4. |Δ| ≥ 8 dB 视为断崖（AUDIO_CLIFF_DB_THRESHOLD = 8.0）
+  处理完即 unlink 中间 wav，不污染 output/
 
+pass 判定规则：
+  visual_jump == false（severity ∈ {none, mild} 视作通过；moderate/severe 视为不通过）
+  subtitle_occlusion == false
+  text_clear == true
+  audio_cliff == false
 
-pass 判定规则
-- visual_jump == false（severity ∈ {none, mild} 视作通过）
-- subtitle_occlusion == false
-- text_clear == true
-- audio_cliff == false
-
-VLM 不可用时（如配额耗尽）：
-- 视觉/字幕/文字三项检查标记为 ❓ 无法判定（None）
-- overall pass 仅由 audio_cliff 决定
-- suggestions 显式标注 "VLM 不可用" + 原始错误信息
-- 仍输出完整 JSON + Markdown + 抽帧 + filmstrip，便于手动复核
+VLM 不可用 / 解析失败时：
+  visual_* 标记为 unknown（None），不强行通过也不强行失败
+  suggestions 显式标注；overall pass 只由 audio_cliff 决定
 
 
 实测命令
 --------
-1) --no-vlm 烟测（验证抽帧 + 音频检测独立可跑通，避开 VLM 配额问题）：
-
     python scripts\cut_point_review.py ^
         --video output\out\final_v6.mp4 ^
         --storyboard examples\sample_storyboard.json ^
-        --no-vlm ^
-        --out output\cut_point_report_novlm.md ^
-        --json-out output\cut_point_review_novlm.json ^
-        --frames-dir output\cut_point_review_novlm
+        --out output\cut_point_report.md ^
+        --json-out output\cut_point_review.json ^
+        --frames-dir output\cut_point_review
 
-   结果：cut_1 audio 平滑（Δ=-0.5 dB），cut_2 audio 跃升 17.2 dB（断崖）
-
-2) 正式运行（含 VLM 调用，但命中月度配额）：
-
-    python scripts\cut_point_review.py ^
-        --video output\out\final_v6.mp4 ^
-        --storyboard examples\sample_storyboard.json
-
-   结果：cut_1 audio 平滑（✅），cut_2 audio 断崖（❌）；VLM 两次均返回 429
-   GoUsageLimitError，按设计降级为 ❓ 不阻塞 pipeline
-
+    # 完整子进程日志: output\cut_point_review_run.log
 
 shot 边界实测
-------------
-video duration = 15.500s（ffprobe）
-storyboard shots: 3 个，每个 duration=5.0，总和=15.0
-  → scale = 15.5 / 15.0 = 1.0333
+--------------
+ffprobe duration = 15.500s
+storyboard 3 shots × 5.0s = 15.0s → scale = 15.5/15.0 = 1.0333
 
 | Shot | start  | end    |
 |------|--------|--------|
@@ -158,196 +127,189 @@ storyboard shots: 3 个，每个 duration=5.0，总和=15.0
 | 3    | 10.333 | 15.500 |
 
 cut_points（N-1=2）：
-- cut_1 @ 5.167s（shot1 → shot2）
-- cut_2 @ 10.333s（shot2 → shot3）
+  cut_1 @ 5.167s   shot1 → shot2
+  cut_2 @ 10.333s  shot2 → shot3
 
 
 每切点评估结果
 --------------
 
 cut_1 @ 5.167s（shot1 → shot2）
-- 抽帧：before={4.667s, 4.867s, 5.067s}, after={5.267s, 5.467s, 5.667s}
-- filmstrip：1536×161 PNG，6 帧横向；存 cut_1\filmstrip.png + filmstrip.jpg
-- VLM：❓ 不可用（月度配额耗尽 429 GoUsageLimitError）
-- audio 检测：
-    抽段 [4.167s, 6.167s]（2s wav，32kHz mono，128078 bytes）
-    astats 20 个 100ms 块全部解析成功
+  抽帧：before={4.667s, 4.867s, 5.067s}, after={5.267s, 5.467s, 5.667s}
+  filmstrip：1536×161 PNG（6 帧 1x6 横向）+ JPEG ~70KB
+  VLM 审查（MODEL = minimax-m3）：
+    visual_jump = true，severity = moderate
+    说明：切点前后从户外黄昏伞下场景直接跳到室内料理台蒸汽场景，环境/色温/角色姿态完全不同，
+          属于较明显的硬切
+    subtitle_occlusion = false（字幕条位于画面底部，未遮挡人物面部或核心动作）
+    text_clear = true（中文字幕笔画清晰可读，无乱码/截断）
+    score = 62，opinion：叙事需要的有意切换，字幕未遮挡主体，整体可接受但略显生硬
+  Audio Cliff：cut_1 平滑
     pre-cut mean RMS = -41.98 dB（5 块：4.5s/4.6s/4.7s/4.8s/4.9s）
     post-cut mean RMS = -42.48 dB（5 块：5.5s/5.6s/5.7s/5.8s/5.9s）
     Δ = -0.49 dB（远低于 8 dB 阈值）
-    verdict: 音频平滑：pre=-42.0 dB, post=-42.5 dB, Δ=-0.5 dB
-    cliff = false
-- 结论：audio ✅ PASS；VLM ❓ 无法判定；整体 = audio PASS ✅
+    cliff = false，verdict：音频平滑：pre=-42.0 dB, post=-42.5 dB, Δ=-0.5 dB
+  结论：
+    visual_jump（moderate）= ❌ FAIL
+    subtitle_occlusion = ✅ PASS
+    text_clear = ✅ PASS
+    audio_cliff = ✅ PASS
+    → overall_pass = ❌ FAIL（视觉跳跃 moderate 视为不通过）
 
 cut_2 @ 10.333s（shot2 → shot3）
-- 抽帧：before={9.833s, 10.033s, 10.233s}, after={10.433s, 10.633s, 10.833s}
-- filmstrip：1536×161 PNG，6 帧横向；存 cut_2\filmstrip.png + filmstrip.jpg
-- VLM：❓ 不可用（月度配额耗尽 429 GoUsageLimitError）
-- audio 检测：
-    抽段 [9.333s, 11.333s]（2s wav）
+  抽帧：before={9.833s, 10.033s, 10.233s}, after={10.433s, 10.633s, 10.833s}
+  filmstrip：1536×161 PNG + JPEG ~74KB
+  VLM 审查：VLM 返回 reasoning 但缺 JSON → parse_json 返回
+            {"parse_error": true, "raw": "<think>...</think>"}
+            → 走 setdefault 容错路径：visual_jump=false, severity=unknown,
+              score=0, opinion=""
+            （不阻塞 pipeline；视觉相关检查标 ❓）
+  Audio Cliff：cut_2 断崖
+    抽段 [9.333s, 11.333s]（2s wav，32kHz mono）
     astats 20 个 100ms 块全部解析成功
-    pre-cut mean RMS = -42.94 dB
-    post-cut mean RMS = -25.79 dB
+    pre-cut mean RMS = -42.94 dB（ambient-only）
+    post-cut mean RMS = -25.79 dB（ambient + narration）
     Δ = +17.16 dB（远超 8 dB 阈值）
-    verdict: 音频断崖：跃升 17.2 dB (pre=-42.9 dB, post=-25.8 dB)
-    cliff = true
-- 结论：audio ❌ FAIL（断崖）；VLM ❓ 无法判定；整体 = audio FAIL ❌
+    cliff = true，verdict：音频断崖：跃升 17.2 dB (pre=-42.9 dB, post=-25.8 dB)
+  结论：
+    visual_jump（unknown）= ❓ 无法判定
+    subtitle_occlusion（unknown）= ❓ 无法判定
+    text_clear（unknown）= ❓ 无法判定
+    audio_cliff = ❌ FAIL（Δ=+17.16 dB 断崖）
+    → overall_pass = ❌ FAIL
 
-cut_2 音频断崖根因分析（与 Phase D p5_v6_audio.py 对照）：
-- p5_v6_audio.py 混音链路：
-    narration.adelay = 10330ms（shot3 起点）
-    piano.adelay    = 11500ms
-    ambient         = 全程 + 2s fade-in / 2.5s fade-out
-- cut_2 位置 = 10.333s ≈ narration.adelay 起点（10.330s）
-- 因此 pre-cut RMS 反映的是「ambient-only ≈ -42.9 dB」（平稳底噪）
-   post-cut RMS 反映的是「ambient + narration ≈ -25.8 dB」
-   Δ = +17 dB 是因为 edge-tts 配音"雨还在下，他走得不快。" 直接硬切进入
-   没有 fade-in 衔接，造成可感知的"音频断崖"
-- 这是 Phase D 既定行为：当前配音按 shot3 起 adelay 硬切，未做渐入；
-   改进建议：给 narration 加 afade=in:st=10.33:d=0.5 等渐入，让底噪→配音
-   衔接平滑（"建议在切点附近加淡入淡出或检查音频衔接"）
+cut_2 音频断崖根因（对照 Phase D p5_v6_audio.py）：
+  p5_v6_audio.py 混音链路中：
+      narration.adelay = 10330ms（shot3 起点）
+      piano.adelay     = 11500ms
+      ambient          = 全程 + 2s fade-in / 2.5s fade-out
+  cut_2 位置 = 10.333s ≈ narration.adelay 起点（10.330s）
+  因此 pre-cut RMS 反映「ambient-only ≈ -42.9 dB」（平稳底噪）
+       post-cut RMS 反映「ambient + narration ≈ -25.8 dB」
+  Δ = +17 dB 是因为 edge-tts 配音「雨还在下，他走得不快。」 直接硬切进入，
+  没有 fade-in 衔接，造成可感知的"音频断崖"。
+  这是 Phase D 既定行为（narration 按 shot3 起 adelay 硬切，未做渐入）；
+  改进建议：给 narration 加 afade=in:st=10.33:d=0.5，让底噪→配音平滑过渡。
 
 
 JSON 报告结构（output\cut_point_review.json）
 --------------------------------------------
 {
-  "video": "D:\\ai-video-pipeline\\output\\out\\final_v6.mp4",
-  "storyboard": "D:\\ai-video-pipeline\\examples\\sample_storyboard.json",
-  "duration": 15.5,
-  "n_shots": 3,
-  "shots": [
-    {"index": 1, "start": 0.0, "duration": 5.167, "end": 5.167},
-    {"index": 2, "start": 5.167, "duration": 5.167, "end": 10.333},
-    {"index": 3, "start": 10.333, "duration": 5.167, "end": 15.5}
-  ],
+  "video":            "D:\\ai-video-pipeline\\output\\out\\final_v6.mp4",
+  "storyboard":       "D:\\ai-video-pipeline\\examples\\sample_storyboard.json",
+  "duration":         15.5,
+  "n_shots":          3,
+  "shots":            [ {index, start, duration, end} ×3 ],
   "cut_points": [
     {
-      "id": "cut_1",
-      "position": 5.167,
-      "from_shot": 1,
-      "to_shot": 2,
-      "frames": [6 个 {label, side, t, path}],
-      "filmstrip": {"png": "...", "jpg": "...", "width": 1536, "height": 161},
-      "vlm": { ... vlm_unavailable=true, vlm_error="RuntimeError: ... 429 ..." },
-      "audio": {
-        "available": true,
-        "pre_rms_db": -41.98, "post_rms_db": -42.48, "delta_db": -0.49,
-        "cliff": false,
-        "verdict": "音频平滑：pre=-42.0 dB, post=-42.5 dB, Δ=-0.5 dB",
-        "raw_chunks": 20, "error": null
-      },
-      "checks": {
-        "visual_jump": null, "subtitle_occlusion": null, "text_clear": null,
-        "audio_cliff": true
-      },
-      "vlm_unavailable": true,
-      "pass": true,
-      "suggestions": ["VLM 不可用：... 需手动复核或稍后重跑"]
+      "id": "cut_1", "position": 5.167, "from_shot": 1, "to_shot": 2,
+      "frames":   [ {label, side, t, path} ×6 ],
+      "filmstrip":{png, jpg, width=1536, height=161},
+      "vlm":      { visual_jump, severity, comments, score=62, opinion, raw, vlm_unavailable=False },
+      "audio":    { available, pre_rms_db=-41.98, post_rms_db=-42.48,
+                    delta_db=-0.49, cliff=false, verdict, raw_chunks=20, error=null },
+      "checks":   { visual_jump=false (FAIL), subtitle_occlusion=true, text_clear=true,
+                    audio_cliff=true },
+      "pass":     false,
+      "suggestions": ["切点视觉跳跃（moderate）... 建议加 crossfade 转场或调整运镜节奏"]
     },
     {
-      "id": "cut_2", ... audio.cliff=true, delta=+17.16 ... pass=false ...
+      "id": "cut_2", ... "vlm": {"parse_error": true, "raw": "...",
+                                  visual_jump=false, severity=unknown, score=0, ...},
+      "audio":    { ..., pre_rms_db=-42.94, post_rms_db=-25.79,
+                    delta_db=+17.16, cliff=true, verdict="音频断崖：跃升 17.2 dB..." },
+      "checks":   { visual_jump=true (unknown), subtitle_occlusion=true (unknown),
+                    text_clear=true (unknown), audio_cliff=false (FAIL) },
+      "pass":     false,
+      "suggestions": ["音频断崖：跃升 17.2 dB ... 建议在切点附近加淡入淡出或检查音频衔接"]
     }
   ],
-  "overall": {
-    "pass": false,
-    "issues": [
-      "cut_2 @ 10.33s: VLM 不可用：RuntimeError: ... 429 ...",
-      "cut_2 @ 10.33s: 音频断崖：跃升 17.2 dB (pre=-42.9 dB, post=-25.8 dB) 建议..."
-    ]
-  },
+  "overall": { "pass": false,
+               "issues": [ "cut_1 @ 5.17s: 切点视觉跳跃（moderate）...",
+                           "cut_2 @ 10.33s: 音频断崖：跃升 17.2 dB ..." ] },
   "thresholds": {
-    "audio_cliff_db": 8.0, "audio_half_span_s": 1.0, "audio_chunk_ms": 100,
-    "frame_half_span_s": 0.5, "n_frames_each_side": 3,
-    "before_offsets_s": [-0.5, -0.3, -0.1],
-    "after_offsets_s": [0.1, 0.3, 0.5]
+    "audio_cliff_db": 8.0,        "audio_half_span_s": 1.0,   "audio_chunk_ms": 100,
+    "frame_half_span_s": 0.5,     "n_frames_each_side": 3,
+    "before_offsets_s": [-0.5, -0.3, -0.1],  "after_offsets_s": [0.1, 0.3, 0.5]
   },
-  "model": "minimax-m3",
-  "generated_at": "2026-08-17T22:33:02"
+  "model":       "minimax-m3",
+  "generated_at":"2026-08-18T00:01:04"
 }
 
 
 Markdown 报告（output\cut_point_report.md）
 ------------------------------------------
-报告含 4 大块：
-1. 头部：video/storyboard/duration/shots/cut_points/PASS/Overall 概要
-2. Issues：所有未通过的项（含 VLM 不可用 + audio 断崖）
-3. Summary 表：cut / position / from→to / 4 项检查 / result
-4. Details：每个 cut 的 4 段详情（Visual Jump / Subtitle Occlusion / Text Clear /
-   Audio Cliff）+ Suggestions
-
-附 Method + Pass Criteria + 自动时间戳。UTF-8 编码（emoji ✅/❌/❓ 原样保留）。
+报告头部含 video/storyboard/duration/shots/cut_points/PASS/Overall 概要
+Issues 段列出全部未通过项
+Summary 表：cut / position / from→to / 4 项检查 / 结果（emoji ✅/❌/❓）
+Details 段：每个 cut 的 4 段详情（Visual Jump / Subtitle Occlusion / Text Clear /
+Audio Cliff）+ Suggestions
+Method + Pass Criteria + 自动时间戳，UTF-8 编码（emoji 原样保留）。
 
 
 验收对照
 --------
-任务验收标准                                  实测                                              结果
+任务验收标准                                      实测                                              结果
 ───────────────────────────────────── ────────────────────────────────────────── ───────
-1. 脚本跑通（python scripts\cut_point_review.py  python 跑通，所有抽帧 + audio 检测 +     ✅
-   --video ... --storyboard ...）              报告写出；VLM 调用因配额失败但
-                                              不阻塞 pipeline（按设计降级）
-
-2. 两个切点（5s/10s 附近）各输出评估结果     cut_1 @ 5.167s / cut_2 @ 10.333s 各有 ✅
-                                              完整 JSON：frames × 6 + filmstrip + VLM
-                                              + audio + checks + pass + suggestions
-
-3. 音频断裂检测有结论（RMS 是否有断崖）       cut_1 平滑（Δ=-0.49 dB）/ cut_2 断崖 ✅
-                                              （Δ=+17.16 dB，与 Phase D narration
-                                              adelay=10330ms 完全吻合）
-
-4. 报告写到 output\cut_point_report.md +     output\cut_point_report.md              ✅
-   任务进度写到 D:\ai-video-pipeline\pE_report.txt  （本文件）
+1. 脚本跑通（python scripts\cut_point_review.py   python 跑通；抽帧 + VLM 审查 + 音频断崖全 ✅
+   --video ... --storyboard ...）                  流程完成；JSON + Markdown + filmstrip
+                                                  全部写出
+2. 两个切点（5s/10s 附近）各输出评估结果          cut_1 @ 5.167s / cut_2 @ 10.333s 各有 ✅
+                                                  完整 JSON：frames × 6 + filmstrip + VLM
+                                                  + audio + checks + pass + suggestions
+3. 音频断裂检测有结论（RMS 是否有断崖）           cut_1 平滑（Δ=-0.49 dB）/ cut_2 断崖   ✅
+                                                  （Δ=+17.16 dB，与 Phase D narration
+                                                  adelay=10330ms 完全吻合）
+4. 报告写到 output\cut_point_report.md +           output\cut_point_report.md              ✅
+   任务进度写到 D:\ai-video-pipeline\pE_report.txt （本文件）
 
 
 硬约束遵守
 ----------
-✅ 复用 scripts\filmstrip.py 的 filmstrip()（import filmstrip as _fs，零修改）
-✅ 复用 scripts\r2v_review.py 的 chat() / frame_to_b64() / parse_json() / MODEL
+✅ 复用 scripts\filmstrip.py 的 filmstrip() / filmstrip_b64() / _compress_to_kb()
+   （import filmstrip as _fs，零修改）
+✅ 复用 scripts\r2v_review.py 的 chat() / parse_json() / MODEL / API_KEY / API_URL
    （import r2v_review as _r2v，零修改）
 ✅ scripts\filmstrip.py, scripts\r2v_review.py 未触碰
 ✅ scripts\overlay.py, scripts\render_overlays.py, overlays\* 未触碰
 ✅ scripts\compose_final.py, scripts\p5_v6_audio.py 未触碰
 ✅ pipeline.yaml 未修改
 ✅ 纯 Python + subprocess + ffmpeg + PIL + requests（无新依赖）
-✅ 所有读写都在 D:\ai-video-pipeline 内（除 astats 临时 wav 自动 unlink）
+✅ 所有读写都在 D:\ai-video-pipeline 内（astats 临时 wav 自动 unlink）
 ✅ 没 git init / 没改 git config / 没 push（用户负责推送）
 
 
 已知限制 / 后续可改
 -------------------
-- VLM 月度配额（GoUsageLimitError）当前已耗尽，cuts 的 visual_jump /
-  subtitle_occlusion / text_clear 三项检查为 ❓ 未知状态；audio 检测照常完成。
-  重跑建议：
-    a) 等 12 天后配额自动重置
-    b) 或访问 https://opencode.ai/workspace/wrk_01KYRTKPR28RSD02GYYQA786SK/go
-       启用 balance（用户手动操作，脚本侧无法处理）
-    c) 或换模型/换 endpoint（需改 r2v_review.py 的 API_URL/MODEL/API_KEY，超出本期硬约束）
+- cut_2 VLM 返回 reasoning 但缺 JSON：parse_json() 返回
+    {"parse_error": true, "raw": "<think>...</think>"}
+  脚本用 setdefault 容错把视觉三项标为 unknown（None），
+  不强行判定为通过/失败，整体 pass 由 audio_cliff 决定；JSON 里
+  保留了 raw 原貌（可手动核对 VLM 真实答案）。
+  重跑建议：换 prompt（如明确说明 "Return ONLY a JSON object"）或
+  调整聊天模型温度（默认 _r2v.chat 走 minimax-m3，温度未在脚本里硬编码）。
 
 - audio 断崖阈值 8 dB 是经验值；如需更严格可改 AUDIO_CLIFF_DB_THRESHOLD。
-  Phase D 的 narration.adelay=10330ms 硬切产生的 17 dB 跃升在阈值上绰绰有余，
-  不会被误判为"audio 平滑"。
+  Phase D 的 narration.adelay=10330ms 硬切产生的 17 dB 跃升在阈值上
+  绰绰有余，不会被误判为"audio 平滑"。
 
-- 抽帧时刻 BEFORE/AFTER_OFFSETS 默认 ±0.5s 等距 3 帧（无重叠、覆盖切点前后各 500ms）。
-  如需更密集的采样可调 --n-frames N（脚本会按比例重算偏移）。
+- 抽帧时刻 BEFORE/AFTER_OFFSETS 默认 ±0.5s 等距 3 帧（无重叠、覆盖切点前后
+  各 500ms）。如需更密集的采样可调 --n-frames N（脚本会按比例重算偏移）。
 
-- shot 边界用 storyboard.duration 累加计算；若上游 storyboard 增加 start_time 字段，
-  脚本自动改用显式值（parse_shot_boundaries 优先级 1 → 2 → 3 → 4）。
+- shot 边界用 storyboard.duration 累加计算；若上游 storyboard 增加
+  start_time 字段，脚本自动改用显式值（parse_shot_boundaries 优先级 1 → 2 → 3 → 4）。
 
-- filmstrip 长度限制 1536px 长边（来自 filmstrip.py 的 MAX_LONG_EDGE）。
-  6 帧 1x6 横向会按比例缩到 1536×161（~150KB JPEG / ~330KB PNG）。
+- filmstrip 长边限制 1536px（来自 filmstrip.py 的 MAX_LONG_EDGE）。
+  6 帧 1x6 横向会按比例缩到 1536×161（~70KB JPEG / ~330KB PNG）。
 
 - audio 检测只覆盖音频"响度断崖"，不识别音频内容异常（卡顿、pop、底噪突变）。
-  如需更细粒度可在 astats 之外加 aperture/aphaser 等专项 filter。
+  如需更细粒度可在 astats 之外加 aphaser / afreqshift 等专项 filter。
 
-- output\cut_point_review\_audio_tmp\ 在每次 evaluate_cut_point 的 finally 块
-  unlink 中间 wav，正常退出后目录为空。异常退出（如 Ctrl-C）可能残留 wav，
-  下次运行会被覆盖，无累积污染。
+- output\cut_point_review\_audio_tmp\ 在 evaluate_cut_point 的 finally 块
+  unlink 中间 wav，正常退出后目录为空。异常退出可能残留 wav，下次运行会
+  被覆盖，无累积污染。
 
-- exit code：overall_pass → 0；FAIL → 1；与现有 Phase C/D 一致（compose_final
-  也用 exit code 表示 verify 失败）。可被 shell 直接当 gate 用。
+- exit code：overall_pass → 0；FAIL → 1。可被 shell 直接当 gate 用。
 
-- 报告里建议（suggestions）是基于规则生成的：
-  • 视觉跳跃 → 加 crossfade 转场
-  • 字幕遮挡 → 调字幕位置或换无字幕区间
-  • 字幕不清晰 → 加大烧录字号或检查源文本
-  • 音频断崖 → 加淡入淡出或检查 audio 衔接
-  是经验模板，未做 VLM-driven 建议生成。
+- suggestions 是基于规则的模板（视觉跳跃 → crossfade；字幕遮挡 → 调整位置；
+  字幕不清晰 → 加大字号；音频断崖 → 淡入淡出），未做 VLM-driven 建议生成。

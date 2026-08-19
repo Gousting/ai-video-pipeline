@@ -24,9 +24,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-API_URL = "https://opencode.ai/zen/go/v1/chat/completions"
-API_KEY = "sk-VxLhB9Fqnm6XBgd4l1kjloOGq2bJ9g9sKJ2Y0SJTdLwdt6Rtd0olISu02pkmNCZr"
-MODEL = "qwen3.8-max"
+from vlm_config import API_KEY, API_URL, MODEL  # 统一 VLM 配置入口（Phase F）
 
 
 def frame_to_b64(img: Image.Image, target_kb: int = 90) -> str:

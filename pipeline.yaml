@@ -1,44 +1,305 @@
+################################################################################
+# ai-video-pipeline v3.0  ─  纯 T2V 直出 + Plan B 风格锚定 + 后期包装
+################################################################################
+#
+# 设计依据：A/B 对照实验（abtest_report.txt，2026-08-18）
+#   - A 组（纯提示词 T2V 直出 8 段拼接） 50.1 分 ✅ 已验证最优基线
+#   - B 组（v1 工程化：Z-Image 定妆 + R2V 锁角色 + ffmpeg 衍生）36.0 分 ❌
+#   - 参考视频（input_douyin_ref.mp4）68.5 分 ← 目标锚点
+#   - A 组 vs 参考 -18.4 分差距来自：①风格错位 ②制作完成度（40）
+#
+# v3 决策矩阵：
+#   - 放弃 v1 的 image/character 双阶段约束链（实验证明是负增益）
+#   - 用 prompt-pack 替代 image+character：纯文本强描述 + Plan B 风格锚定
+#   - 引入强制 overlay 阶段（v1 是可选，A 组干脆没做，所以 40 分）
+#   - 保持 audio+final 链路，加 VLM 七维度评分对比
+#
+# LoRA 路径已验证不可行（见 docs/v3-lora-verdict.md）——H3 二次元 LoRA 公开生态 = 0
+#
+################################################################################
+
 pipeline: ai-video
-version: 0.1
+version: 3.0
+schema_version: 3
+
+metadata:
+  supersedes: pipeline.yaml v0.1 (image+character+videofmpeg chain)
+  based_on_experiments:
+    - abtest_report.txt          # 2026-08-18 A/B 对照实验
+    - output/abtest/prompts_a.md # A 组 8 段 prompt 全文
+  expected_score: "60-65 / 70 (参考视频上限 70)"
+  baseline_score: 50.1            # A 组基线
+  gate_minimum: 60.0             # v3 任务硬指标
+  lora_status: "❌ 不启用（docs/v3-lora-verdict.md）"
+  prompt_strategy: "plan_b_prompt_reinforcement"  # 替代 LoRA 风格锚定
+
+################################################################################
+# 主链路：6 阶段
+#   script → prompt-pack → video → overlay → audio → final
+################################################################################
+
 stages:
+
+  ##############################################################################
+  # Stage 1: script —— 用户 brief → storyboard.json
+  ##############################################################################
   - id: script
-    agent: visual-storyteller        # 创意层角色
-    input:  user_brief.md            # 用户选题/方向/关键剧情点
+    name: "分镜脚本"
+    description: |
+      用户 brief（选题/方向/关键剧情点/时长要求/风格方向）→
+      生成分镜脚本 storyboard.json。
+      保留 v1 的字段约定（shots[]/duration/camera/style/notes），
+      新增 v3 专属：char_blocks（角色锚定引用）、scene_blocks（场景锚定引用）、
+      style_strategy（"plan_b_prompt_reinforcement"）。
+    agent: visual-storyteller
+    input:  user_brief.md
     output: storyboard.json
-    gate: script-review              # 验收：双 agent 互评
-  - id: image
-    agent: image-prompt-engineer
-    input: storyboard.json
-    output: frames/ + char_bible.json
-    gate: vlm-review
-  - id: character
-    agent: narrative-designer
-    input: frames/ + char_bible.json
-    output: char_pack/ (圣经+定妆图+ref2va参考图)
-    gate: consistency-check
+    schema_ref: schemas/storyboard.schema.json
+    artifact_path: output/pipeline_v3/sb/storyboard.json
+    gate:
+      id: script-review
+      description: "双 agent 互评通过（creative-coach + director-reviewer）"
+      criteria:
+        - "≥ 8 段分镜、每段含完整 prompt_id + camera 字段"
+        - "char_blocks/scence_blocks 字段非空（v3 必须）"
+        - "总时长 60-80s（每段 8s，可含 8-10 段）"
+
+  ##############################################################################
+  # Stage 2: prompt-pack —— 替代 v1 的 image+character
+  ##############################################################################
+  - id: prompt-pack
+    name: "Prompt 资产包（替代 v1 定妆+角色包）"
+    description: |
+      把 storyboard 每个 shot 渲染成 H3 官方三段式 prompt：
+        integrated_multimodal_description + overall_soundscape + non_diegetic_music
+      严格按 STYLE_BLOCK + CHAR_BLOCK + SCENE_BLOCK + ANTI_BLOCK 四段拼接。
+      角色描述块（学姐/学妹外貌服装气质）每段绝对一致；
+      镜头语言写 type + amplitude + speed 三要素；
+      每段只一个主要动作。
+      显式不生成：Z-Image 定妆图 / R2V 参考图 / R2V 参考视频 / ffmpeg 衍生。
+    agent: prompt-pack-builder
+    input:  storyboard.json + output/abtest/prompts_a.md（角色块复用）
+    output:
+      - "clips/shot{NN}_prompt.txt"     # 每段完整 prompt
+      - "clips/shot{NN}_meta.json"      # 段元数据（seed/camera/length/style_strategy）
+      - "clips/style_block.txt"         # 全片统一风格锚定（Plan B 强化版）
+      - "clips/char_blocks.json"        # 角色描述块（每段绝对一致）
+    artifact_dir: output/pipeline_v3/clips/
+    dependencies: ["docs/v3-lora-verdict.md §5 Plan B"]
+    gate:
+      id: prompt-pack-consistency
+      description: "逐段 prompt 字符数 / 角色块一致性 / 镜头语言规范校验"
+      criteria:
+        - "每段 prompt 长度 1700-2500 字符（A 组基线区间）"
+        - "char_blocks 在 8 段间完全字符串一致（diff = 0）"
+        - "style_block 在 8 段间完全字符串一致（diff = 0）"
+        - "camera 字段含 type+amplitude+speed 三要素"
+        - "ANTI_BLOCK 包含反向锚定短语（no CGI / no photorealism 等）"
+        - "shot{NN}_meta.json 含独立 seed（10001-10010 区间）"
+
+  ##############################################################################
+  # Stage 3: video —— H3 T2V 直出
+  ##############################################################################
   - id: video
-    agent: orchestration            # opencode 编排，调 make-video.ts
-    input:  char_pack/ + storyboard.json
-    output: clips/*.mp4
-    gate: vision-audit (>=70, 自动重跑)
+    name: "T2V 视频生成（H3 纯直出）"
+    description: |
+      H3 MiniMax-Hailuo-03 (= HunyuanVideo-1.5) T2V 直出。
+      - fl2va pruned int8 convrot 模型（与 A 组同）
+      - 768×1344 竖屏，每段 8s / 192 帧 / 24fps
+      - 每段独立 seed（10001-10010）
+      - 占位白图 first_frame 走 T2V 模式（ab_t2v_gen.py 已验证）
+      - ComfyUI 8188 端点排队执行
+      - 每段生成后 filmstrip 自查（角色漂移/动作自然性/明显崩坏），
+        明显崩则换 seed 重跑 1 次（仅 1 次，避免无限递归）
+    agent: t2v-orchestrator
+    input:  output/pipeline_v3/clips/shot{NN}_prompt.txt + shot{NN}_meta.json
+    output: output/pipeline_v3/clips/shot{NN}.mp4 + shot{NN}_meta.json (updated)
+    artifact_dir: output/pipeline_v3/clips/
+    config:
+      unet: minimax_h3_fl2va_pruned_int8_convrot.safetensors
+      clip: qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+      video_vae: minimax_h3_video_vae_fp16.safetensors
+      audio_vae: minimax_h3_audio_vae_fp32.safetensors
+      width: 768
+      height: 1344
+      length: 192        # 8s @ 24fps
+      steps: 20
+      sampler: "res_multistep"
+      scheduler: "simple"
+      denoise: 1.0
+      comfy_endpoint: http://127.0.0.1:8188
+      comfy_memory_patch: MiniMaxH3MemoryEfficientSageAttentionPatch
+      easy_cache:
+        enabled: true
+        reuse_threshold: 0.2
+        start_percent: 0.15
+        end_percent: 0.95
+    dependencies: ["prompt-pack.gate"]
+    retry_policy:
+      on_selfcheck_fail: "换 seed 重跑 1 次"
+      max_retries: 1
+      gate:
+        id: video-selfcheck
+        description: "filmstrip 6 帧自查 + VLM 视觉判断"
+        criteria:
+          - "角色发色/瞳色/脸型在 6 帧内无明显漂移"
+          - "无面部崩塌 / 手指数目异常 / 肢体融合"
+          - "动作幅度符合 prompt 描述"
+          - "若 style_strategy=plan_b_prompt_reinforcement 但输出写实质感 ≥ 30%，换 seed 重跑"
+        output: qa/selfcheck/shot{NN}_filmstrip_6.jpg
+
+  ##############################################################################
+  # Stage 4: overlay —— 后期包装（A 组 40 分的根因，本轮必须做）
+  ##############################################################################
   - id: overlay
-    agent: orchestration            # scripts/render_overlays.py：pil/hyperframes/remotion
-    input:  storyboard.json + clips/
-    output: overlays/               # 每个 shot 的 overlay 字段 + 顶层 overlays 列表 → output/overlays/
-    gate: overlay-render (provider 可用且产物非空)
-    options:
-      default_engine: pil          # 兜底；hyperframes 不可用时自动降级
-      engines: [pil, hyperframes, remotion]
+    name: "后期包装（字幕 / 标题卡 / 片头片尾 / 角标）"
+    description: |
+      在 v1 阶段是 optional，A 组干脆跳过 → 制作完成度 40。本轮强制必做。
+      - 标题卡：开场"选学姐还是学妹？" + 角色名标签随时间线切换
+      - 字幕条：每段底部动态字幕（角色对话 / 内心独白）
+      - 片头：0-2s 渐显 logo + 标题
+      - 片尾：58-60s 渐隐"关注 + 评论"卡片
+      复用 scripts/overlay.py + render_overlays.py + overlays/ 模板。
+    agent: overlay-engineer
+    input:
+      - storyboard.json
+      - output/pipeline_v3/clips/shot{01-NN}.mp4
+    output: output/pipeline_v3/overlays/ + output/pipeline_v3/clips/shot{NN}_with_overlay.mp4
+    artifact_dir: output/pipeline_v3/overlays/
+    engines:
+      default: pil       # 兜底：PIL 烧录字幕 PNG 到视频
+      fallback: ffmpeg_drawtext   # 二级兜底：ffmpeg drawtext 滤镜
+    required_components:
+      - title_card_intro:    "0-2s 渐显：'选学姐还是学妹？'"
+      - character_labels:    "按段切标签：'学姐 / 学妹 / 双人'"
+      - subtitle_bar:        "每段底部动态字幕"
+      - outro_card:          "末 2s 渐隐：'关注 + 评论'"
+    gate:
+      id: overlay-render
+      description: "渲染产物非空 + 时长与原视频一致 ±0.1s"
+      criteria:
+        - "shot{NN}_with_overlay.mp4 存在且时长 = 原 mp4 ±0.1s"
+        - "标题卡 / 角色标签 / 字幕 / 片尾四件套全部渲染成功"
+
+  ##############################################################################
+  # Stage 5: audio —— edge-tts 配音 + BGM 混音
+  ##############################################################################
   - id: audio
-    agent: orchestration            # edge-tts 配音 + BGM + 字幕 + 混音
-    input: storyboard.json + clips/ + overlays/
-    output: final.mp4
-    gate: audio-check (时长/响度/音画同步)
+    name: "配音 + BGM"
+    description: |
+      edge-tts 中文配音（基于 storyboard.shots[].narration 字段）；
+      BGM 沿用 abtest 已验证的"4-note cheerful piano hook"风格（保持 A 组音频连贯性）；
+      ffmpeg acrossfade 混音；响度归一化到 -16 LUFS（抖音标准）。
+      复用 scripts/p5_v6_audio.py 范式改造成 v3_audio.py。
+    agent: audio-engineer
+    input:
+      - storyboard.json
+      - output/pipeline_v3/clips/shot{NN}.mp4（带 T2V 原生音轨）
+      - overlays/
+    output: output/pipeline_v3/audio/shot{NN}_mix.wav + final_mix.wav
+    artifact_dir: output/pipeline_v3/audio/
+    config:
+      tts_engine: edge-tts
+      tts_voice: zh-CN-XiaoxiaoNeural   # 默认中文女声
+      bgm_style: jpop_pastel_loop
+      target_lufs: -16
+      mixing: ffmpeg_acrossfade_0.25s
+    dependencies: ["video.gate", "overlay.gate"]
+    gate:
+      id: audio-check
+      description: "时长/响度/音画同步"
+      criteria:
+        - "final_mix.wav 时长 = 视频总时长 ±0.1s"
+        - "响度 -16 LUFS ±1"
+        - "音轨无 clip / 无静音段 >2s"
+
+  ##############################################################################
+  # Stage 6: final —— 拼接 + VLM 七维度评分 + 报告
+  ##############################################################################
   - id: final
-    agent: short-video-editing-coach
-    input: final.mp4
-    output: acceptance.md
-    gate: content-rules
+    name: "成片拼接 + VLM 评分 + 报告"
+    description: |
+      ffmpeg xfade 拼接 N 段带 overlay 的视频；
+      复用 ab_score.py 口径（VLM 七维度评分）+ 参考视频对比打分；
+      写 v3_report.txt（含七维度对比表 + LoRA 验证结论 + 差距清单）。
+    agent: finalizer
+    input:
+      - output/pipeline_v3/clips/shot{NN}_with_overlay.mp4
+      - output/pipeline_v3/audio/final_mix.wav
+      - input_douyin_ref.mp4（参考视频，68.5 分锚点）
+    output:
+      - output/pipeline_v3/final_v3.mp4            # 主产物（任务硬要求）
+      - output/pipeline_v3/qa/filmstrip_v3_24.jpg
+      - output/pipeline_v3/qa/vlm_scores_v3.json
+      - output/pipeline_v3/qa/vlm_report_v3.md
+      - v3_report.txt                              # 顶层报告（D:\ai-video-pipeline\）
+    artifact_dir: output/pipeline_v3/
+    config:
+      concat_method: ffmpeg_xfade
+      xfade_duration: 0.25
+      target_resolution: "720x1280"
+      target_codec: "h264+aac"
+      vlm_model: minimax-m3
+      vlm_dimensions: 7
+      vlm_weights:
+        画面质量: 1.0
+        角色一致性: 1.5
+        镜头语言: 1.5
+        动作流畅度: 1.0
+        风格与氛围: 1.0
+        制作完成度: 1.0
+        档次定位: 1.0
+      total_weight: 8.0
+    dependencies: ["audio.gate"]
+    gate:
+      id: content-rules
+      description: "v3 任务硬指标：综合分 ≥ 60"
+      criteria:
+        - "final_v3.mp4 存在，时长 60-80s"
+        - "分辨率 720×1280，h264+aac 编码"
+        - "VLM 综合分 ≥ 60（七维度加权）"
+        - "v3_report.txt 含七维度对比表 + 差距清单"
+        - "硬指标不达标 → 标红，不静默退出"
+
+################################################################################
+# 制品（artifacts）布局
+################################################################################
 artifacts:
-  root: D:\ai-video-pipeline\output\
-  layout: {storyboard: sb/, frames: frames/, char_pack: char/, clips: clips/, overlays: overlays/, final: out/}
+  root: D:\ai-video-pipeline\output\pipeline_v3\
+  layout:
+    storyboard:    sb/storyboard.json
+    prompts:       clips/shot{NN}_prompt.txt
+    meta:          clips/shot{NN}_meta.json
+    style_block:   clips/style_block.txt
+    char_blocks:   clips/char_blocks.json
+    videos:        clips/shot{NN}.mp4
+    videos_w_overlay: clips/shot{NN}_with_overlay.mp4
+    overlays:      overlays/
+    audio:         audio/
+    final:         final_v3.mp4
+    qa:
+      filmstrip_selfcheck: qa/selfcheck/shot{NN}_filmstrip_6.jpg
+      filmstrip_final:     qa/filmstrip_v3_24.jpg
+      vlm_scores:          qa/vlm_scores_v3.json
+      vlm_report:          qa/vlm_report_v3.md
+  report_top_level: D:\ai-video-pipeline\v3_report.txt
+
+################################################################################
+# 与 v1 链路的关键差异（用于 docs/pipeline-v3.md 引用）
+################################################################################
+diff_vs_v1:
+  removed_stages:
+    - "image（v1：Z-Image 生成 6 张定妆图 → VLM 选优 → 约束构图；实验证负增益）"
+    - "character（v1：R2V ref2va 参考图+参考视频锁角色+锁动作；实验证负增益）"
+  new_stages:
+    - "prompt-pack（v3 替代 v1 的 image+character，纯文本锚定）"
+  changed_stages:
+    overlay:
+        v1: "optional（导致 A 组 40 分）"
+        v3: "required（任务硬指标 ≥ 60 必须）"
+    video:
+        v1: "R2V ref2va base + ffmpeg 衍生 → 内容重复"
+        v3: "H3 T2V 纯直出 + Plan B 风格锚定 + 独立 seed"
+    final:
+        v1: "VLM 评分但不强制 ≥ 60"
+        v3: "硬性 ≥ 60；不达标则报告标红，不静默退出"

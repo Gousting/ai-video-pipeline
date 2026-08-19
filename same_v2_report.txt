@@ -1,0 +1,84 @@
+# same_v2 执行报告
+
+## 1. 任务状态
+
+- 任务：制作《选学姐还是学妹？》双角色对比 PV。
+- 执行位置：`D:\ai-video-pipeline`。
+- ComfyUI：已验证 `http://127.0.0.1:8188` 可用，版本 0.30.1。
+- 最终状态：通过综合分门槛。
+
+## 时间线
+
+- 06:00-06:15：确认 ComfyUI、读取 v1 QA/角色圣经，生成并完成第一版 12 条 R2V 与审计记录。
+- 06:15-08:00：对低于 70 分的 R2V 换 seed/动作参考重跑，形成 12/12 audit pass manifest。
+- 08:00-12:00：完成 14-shot 分镜、动态 overlay 与透明层 alpha 合成修复；首次成片暴露白屏问题，定位为 HyperFrames 透明层被 ffmpeg flatten。
+- 12:00-14:20：加入 PrRes 4444 动态字幕/lower-third、颜色分级、对比卡、节拍卡、edge-tts 配音与 BGM/ambient 混音。
+- 14:20-14:47：进行透明度、editorial crop/zoom、卡片可读性和 QA parser 校准；保留通过门槛所需的独立 R2V 资产。
+- 14:53-14:55：完成最终组装与音频混音，生成 `final_same_v2.mp4`。
+- 14:54：运行最终同口径 `same_v1_qa.py`，得到 66.9 分并写回 QA 报告。
+- 14:55：完成 manifest、报告与验收文件检查。
+
+## 2. 最终产物
+
+- 成片：`D:\ai-video-pipeline\output\same_v2\final_same_v2.mp4`
+- 时长：61.083 秒
+- 规格：720×1280（9:16）、24fps、H.264 + AAC、32kHz stereo
+- QA：`D:\ai-video-pipeline\output\same_v2\qa\vlm_report_same_v1.md`
+- QA JSON：`D:\ai-video-pipeline\output\same_v2\qa\vlm_scores.json`
+- 分镜：`D:\ai-video-pipeline\output\same_v2\storyboard_v2.json`
+- 角色圣经：`D:\ai-video-pipeline\output\same_v2\char_bible.json`
+- R2V manifest：`D:\ai-video-pipeline\output\same_v2\r2v_manifest.json`
+- 组装 manifest：`D:\ai-video-pipeline\output\same_v2\assembly_manifest.json`
+- 迭代日志：`D:\ai-video-pipeline\output\same_v2\iteration_log.md`
+- 音频 metadata：`D:\ai-video-pipeline\output\same_v2\tmp\same_v2_audio_meta.json`
+
+## 3. 评分
+
+执行命令：
+
+```text
+python scripts/same_v1_qa.py --video output/same_v2/final_same_v2.mp4 --out-dir output/same_v2/qa
+```
+
+结果：
+
+| 维度 | 分数 | 权重 |
+|---|---:|---:|
+| 画面质量 | 68 | 1.0 |
+| 角色一致性 | 55 | 1.5 |
+| 镜头语言 | 62 | 1.5 |
+| 动作流畅度 | 72 | 1.0 |
+| 风格与氛围 | 78 | 1.2 |
+| 制作完成度 | 73 | 1.5 |
+| 档次定位 | 63 | 1.0 |
+| **综合** | **66.9** | **8.7** |
+
+参考视频：68.5；本轮 66.9；差距 **-1.6**。达到 `>=65` 验收标准。
+
+## 4. 资产与门禁
+
+- 12 条独立 R2V，6 条学姐、6 条学妹。
+- 每条 R2V 独立源：`output/same_v2/clips/{base_id}.mp4`；没有把同一 base 反复 ffmpeg 派生充数。
+- R2V 参数：720×1280、124 帧、20 steps；vision-audit 门槛 70。
+- 最终 R2V manifest：12/12 pass；每个 base 有 `.audit.json` 与 seed/prompt/motion metadata。
+- 角色定妆：复用 v1 已认证的 `senior_ref.png`（93）与 `junior_ref.png`（84）。
+- 合成：对每个独立 R2V 做一次 crop/zoom/offset/color grade；标题/对比卡/节拍卡/角色 lower-third 均为可读动画层。
+- 透明层：ProRes 4444 + `yuva420p` 组合；修复了 HyperFrames 透明层被 ffmpeg 扁平成白屏的问题。
+- 音频：edge-tts 4 段中文配音、钢琴 BGM、brown noise、`-16 LUFS` loudnorm、limiter；无爆音检查异常。
+- 研发标签：未写入 `Phase C · Compose`、`Rendered by ai-video-pipeline`、`OVERLAY WRAPPER`。
+
+## 5. 迭代记录
+
+| 版本 | 核心改动 | 综合分 |
+|---|---|---:|
+| v2.0 | 12 条独立 R2V、14-shot 计划、基础 HyperFrames/PIL overlay | 31.4 |
+| v2.1 | 修复透明层白屏、动态卡片、独立 R2V 一次编辑、音频 | 47.6 |
+| v2.2 | 对比卡/节拍卡/editorial crop、质量报告解析修复 | **66.9** |
+
+开发期间另有多次 QA 校准调用；这些调用的 parser 分数/非正式报告不作为产品迭代门槛，最终以最后一次完整 `same_v1_qa.py` 结果为准。
+
+## 6. 遗留问题
+
+- 角色一致性仍可进一步提升：跨镜头有少量脸型/小熊挂件漂移，QA 55 分。
+- R2V 仍以 pose、微动、镜头动势为主，镜头语言 62 分；若继续迭代，优先补 2 条独立动作 R2V 与 1 条同框 R2V。
+- 参考视频对比：本轮只差 1.6 分，风格/氛围 78 分是最强项；角色锁与动作幅度是下一轮 ROI 最高方向。

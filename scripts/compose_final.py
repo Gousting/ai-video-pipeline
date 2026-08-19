@@ -201,15 +201,34 @@ def collect_overlay_plan(storyboard: dict, overlays_dir: Path) -> dict:
     # 1. 顶层 overlays：扫一遍找出 title-card / end-card
     title_card: dict | None = None
     end_card: dict | None = None
+    extra_overlays: list[dict] = []
     for ov in storyboard.get("overlays", []) or []:
-        tmpl = (ov.get("template") or ov.get("id") or "").lower()
+        oid = str(ov.get("id") or "")
+        tmpl = (ov.get("template") or oid or "").lower()
         if "title" in tmpl and title_card is None:
             title_card = ov
         elif "end" in tmpl and end_card is None:
             end_card = ov
+        elif oid not in ("", "title-card", "end-card"):
+            engine = str(ov.get("engine") or "pil").lower()
+            ext = ".mov" if engine in ("alpha", "prores") else (".mp4" if engine == "hyperframes" else ".png")
+            duration_s = float(ov.get("duration", 2.0))
+            data = ov.get("data") or {}
+            start = float(data.get("start", 0.0))
+            end = float(data.get("end", start + duration_s))
+            expected = overlays_dir / f"{oid}{ext}"
+            extra_overlays.append({
+                "kind": "global_overlay", "engine": engine,
+                "template": ov.get("template", oid), "duration": duration_s,
+                "start": start, "end": end, "data": data,
+                "expected_path": str(expected), "exists": expected.is_file(),
+            })
 
-    # 2. 顶层没有就走 demo 注入
+    # 2. 顶层没有就走中性兜底（不再暴露研发阶段 / AI pipeline 字样）
+    # 默认时长改为 2.0s（参考视频节奏：title/end 各 2-3s 即可，避免黑屏占大头）
     injected_demo = False
+    default_title_dur = 2.0
+    default_end_dur = 2.0
     if title_card is None and end_card is None:
         title_card = {
             "id": "title-card",
@@ -217,10 +236,10 @@ def collect_overlay_plan(storyboard: dict, overlays_dir: Path) -> dict:
             "template": "title-card",
             "data": {
                 "title": storyboard.get("title", "Untitled"),
-                "subtitle": "Phase C · Compose",
-                "tagline": "OVERLAY BURN-IN",
+                "subtitle": "",
+                "tagline": "",
             },
-            "duration": 4.0,
+            "duration": default_title_dur,
         }
         end_card = {
             "id": "end-card",
@@ -228,10 +247,10 @@ def collect_overlay_plan(storyboard: dict, overlays_dir: Path) -> dict:
             "template": "end-card",
             "data": {
                 "title": storyboard.get("title", "Untitled"),
-                "credit": "Rendered by ai-video-pipeline / Phase C",
-                "tagline": "END",
+                "credit": "AI Generated Short",
+                "tagline": "",
             },
-            "duration": 4.0,
+            "duration": default_end_dur,
         }
         injected_demo = True
 
@@ -264,6 +283,45 @@ def collect_overlay_plan(storyboard: dict, overlays_dir: Path) -> dict:
         )
         cumulative += duration
 
+    # 4. 可选的每镜头 overlay 列表：支持一个镜头同时放 lower-third、字幕等
+    # 多个动态层，而不把它们都误当成 subtitle-bar。
+    shot_overlays: list[dict] = []
+    shot_start = 0.0
+    for shot in storyboard.get("shots", []) or []:
+        idx = shot.get("index")
+        duration = float(shot.get("duration", 0.0))
+        shot_end = shot_start + duration
+        raw_overlays = shot.get("overlays") or []
+        if isinstance(raw_overlays, dict):
+            raw_overlays = [raw_overlays]
+        for raw_overlay in raw_overlays:
+            ov = _normalize_overlay_field(raw_overlay) or {}
+            template = str(ov.get("template") or "overlay")
+            engine = str(ov.get("engine") or "pil").lower()
+            ext = ".mov" if engine in ("alpha", "prores") else (".mp4" if engine == "hyperframes" else ".png")
+            expected = overlays_dir / f"shot-{int(idx):02d}-{template}{ext}"
+            entry = {
+                "kind": "shot_overlay",
+                "engine": engine,
+                "template": template,
+                "duration": duration,
+                "start": shot_start,
+                "end": shot_end,
+                "shot_index": idx,
+                "data": ov.get("data", {}),
+                "expected_path": str(expected),
+                "exists": expected.is_file(),
+            }
+            shot_overlays.append(entry)
+        shot_start = shot_end
+
+    # 5. composition：优先读 storyboard.composition，否则用 CLI 默认（1920x1080）
+    comp_raw = storyboard.get("composition") or {}
+    composition = {
+        "width": int(comp_raw.get("width", 1920)),
+        "height": int(comp_raw.get("height", 1080)),
+    }
+
     plan = {
         "injected_demo": injected_demo,
         "title_card": _overlay_to_entry(title_card, overlays_dir, kind="title-card")
@@ -272,10 +330,12 @@ def collect_overlay_plan(storyboard: dict, overlays_dir: Path) -> dict:
         "end_card": _overlay_to_entry(end_card, overlays_dir, kind="end-card")
         if end_card
         else None,
+        "extra_overlays": extra_overlays,
         "subtitles": [
             _subtitle_to_entry(s, overlays_dir) for s in subtitles
         ],
-        "composition": {"width": 1920, "height": 1080},
+        "shot_overlays": shot_overlays,
+        "composition": composition,
         "shot_count": len(storyboard.get("shots", []) or []),
         "storyboard_total_duration": cumulative,
     }
@@ -287,7 +347,7 @@ def _overlay_to_entry(ov: dict, overlays_dir: Path, *, kind: str) -> dict:
     engine = ov.get("engine", "pil")
     template = ov.get("template", kind)
     duration = float(ov.get("duration", 4.0))
-    ext = ".mp4" if engine == "hyperframes" else ".png"
+    ext = ".mov" if engine in ("alpha", "prores") else (".mp4" if engine == "hyperframes" else ".png")
     expected = overlays_dir / f"{kind}.{ext.lstrip('.')}"
     return {
         "kind": kind,
@@ -303,7 +363,7 @@ def _overlay_to_entry(ov: dict, overlays_dir: Path, *, kind: str) -> dict:
 def _subtitle_to_entry(sub: dict, overlays_dir: Path) -> dict:
     """把 subtitle 条目转成 plan entry + 期望文件路径。"""
     engine = sub["engine"]
-    ext = ".mp4" if engine == "hyperframes" else ".png"
+    ext = ".mov" if engine in ("alpha", "prores") else (".mp4" if engine == "hyperframes" else ".png")
     expected = overlays_dir / f"shot-{int(sub['shot_index']):02d}-{sub['template']}.{ext.lstrip('.')}"
     return {
         **sub,
@@ -437,10 +497,12 @@ def build_overlay_filter_complex(
                 f"setsar=1[ov{idx}]"
             )
         else:
+            # Keep the alpha channel of animated lower-third/subtitle MP4s so
+            # transparent text does not flatten into an opaque white screen.
             parts.append(
                 f"[{idx}:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
                 f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"setsar=1,format=yuv420p[ov{idx}]"
+                f"setsar=1,format=yuva420p[ov{idx}]"
             )
 
     # overlay filter 链：按 overlays 顺序串起来（最后加的在最上层）
@@ -914,6 +976,15 @@ def main(argv: list[str] | None = None) -> int:
         f"subs={len(plan['subtitles'])} injected_demo={plan['injected_demo']}"
     )
 
+    # 2.5 若 storyboard 指定了 composition 但 CLI 未传（仍是 1920x1080 默认），用 storyboard 覆盖
+    # 这样 9:16 故事板可以零 CLI 改动直接烧出竖屏
+    sb_comp = plan.get("composition") or {}
+    if (sb_comp.get("width") and sb_comp.get("height")
+            and (args.width == 1920 and args.height == 1080)):
+        args.width = int(sb_comp["width"])
+        args.height = int(sb_comp["height"])
+        _log(f"从 storyboard.composition 读取输出分辨率: {args.width}x{args.height}")
+
     # 3. 缺失 overlay → 调 render_overlays.py
     needs_render = False
     if plan["title_card"] and not plan["title_card"]["exists"]:
@@ -965,6 +1036,33 @@ def main(argv: list[str] | None = None) -> int:
                 "shot_index": s["shot_index"],
             }
         )
+
+    # 同一镜头的附加 overlay（例如 lower-third + subtitle-bar）
+    for ov in plan.get("shot_overlays", []):
+        if not ov["exists"]:
+            _log(f"  缺失 shot overlay shot={ov['shot_index']} template={ov['template']} -> {ov['expected_path']}")
+            continue
+        burn_list.append(
+            {
+                "kind": "shot_overlay",
+                "path": ov["expected_path"],
+                "start": ov["start"],
+                "end": ov["end"],
+                "shot_index": ov["shot_index"],
+            }
+        )
+
+    # Additional editorial layers (for example a side-by-side character card).
+    for ov in plan.get("extra_overlays", []):
+        if not ov["exists"]:
+            _log(f"  缺失 extra overlay: {ov['expected_path']}")
+            continue
+        burn_list.append({
+            "kind": "extra_overlay",
+            "path": ov["expected_path"],
+            "start": max(0.0, float(ov["start"])),
+            "end": max(float(ov["start"]), float(ov["end"])),
+        })
 
     # title-card：在 [0, title_duration]
     if plan["title_card"] and plan["title_card"]["exists"]:

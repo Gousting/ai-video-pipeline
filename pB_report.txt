@@ -177,3 +177,120 @@ HyperFrames 在本机是否可用
 - Remotion provider 接入（React 生态 + 数据驱动视频）。
 - 引入更多 HyperFrames 模板（信息图表、双行字幕、渐隐字幕条、画中画等）。
 - 给 overlay 阶段写专门的 VLM 评审 gate，检查烧录位置 / 不挡主体 / 文字清晰度。
+
+
+=================================================
+Re-verification (2026-08-17 Phase B re-run)
+=================================================
+
+目的：任务文件 oc_task_b_overlay.txt 重新触发 Phase B 全流程验证。
+结论：全部通过，Phase B 仍可工作（代码、模板、pipeline.yaml、测试均未回退）。
+
+执行环境（再次核对）
+------------------
+- OS: Windows 11 (win32 PowerShell 5.1)
+- 工作目录: D:\ai-video-pipeline
+- Python: 3.13.9 (Pillow 12.0.0 / PyYAML 6.0.3)
+- Node.js / npx: 25.8.1 / 11.11.0 (C:\nvm4w\nodejs\npx.cmd)
+- ffmpeg / ffprobe: Gyan.FFmpeg 8.1.2 (full build)
+- HyperFrames: 0.7.109 (from npm registry)
+- Chrome for Testing (headless-shell): 由 `npx hyperframes browser ensure` 拉取，
+  缓存于 %USERPROFILE%\.cache\hyperframes\chrome
+
+测试套件
+--------
+$ python -m pytest tests/ --basetemp=D:\ai-video-pipeline\.pytest_tmp
+============================= 34 passed in 0.42s ==============================
+
+注：默认 C:\Users\shrine\AppData\Local\Temp\pytest-of-shrine 目录被本机上一个旧 pytest
+会话留下了拒绝访问的 ACL，本任务用 --basetemp 把它指到 .pytest_tmp/，避开 ACL 干扰，
+测试本身没有任何跳过或修改。
+
+test_overlay.py 16 例覆盖：
+  - get_provider 三路由 + 未知 engine 抛错
+  - Protocol id 字符串（pil / hyperframes / remotion）
+  - RemotionProvider.render 抛 NotImplementedError
+  - PilProvider 写 PNG / 强制 png 扩展 / 空 text 抛错
+  - HyperFramesProvider._render_template 同时替换 {{key}} 与 __KEY__
+  - HyperFramesProvider._resolve_template 模板存在/缺失
+  - render_overlays 跳过无 overlay 的 shot
+  - render_overlays PIL 字幕全量产出
+  - render_overlays HyperFrames 失败 → PIL 兜底（FakeHF 注入）
+  - render_overlays manifest.json 落盘
+  - _default_text_for_template 五个分支
+  - build_demo_storyboard 在原 storyboard 上挂 overlays 但不破坏 shots
+  - pipeline.yaml：overlay 阶段在 video 之后；options.default_engine == "pil"
+
+test_pipeline.py 8 例 + test_schema.py 10 例沿用上一阶段断言，全部 PASSED。
+
+CLI 自测
+--------
+A) PIL 字幕（验收 #1）：
+   $ python scripts\overlay.py pil "这座城市睡着以后..." output\overlays\selftest_pil_subtitle.png
+   -> OK: D:\ai-video-pipeline\output\overlays\selftest_pil_subtitle.png
+        1920x1080 RGBA / 35 071 bytes / PNG 头正常
+        字幕区中线 alpha=170 (≈65% 黑) RGB=(0,0,0)  ✓ 半透明黑底
+        字幕区外 alpha=0                                 ✓ 仅底部有黑底
+        字幕区白色像素 2 669 个                          ✓ 文字已绘制
+
+B) HyperFrames 可用性 + 标题卡（验收 #2）：
+   HyperFramesProvider().is_available()
+   -> (True, 'npx 可用: 11.11.0 (cmd=C:\\nvm4w\\nodejs\\npx.cmd)')
+
+   $ python scripts\overlay.py hyperframes title-card output\overlays\selftest_hf_titlecard.mp4
+   -> OK: D:\ai-video-pipeline\output\overlays\selftest_hf_titlecard.mp4
+        ffprobe 校验：1920x1080 H.264 (Constrained Baseline) / 4.000s / 30 fps
+                     nb_frames=120 / 75 kb/s
+                     tags: hyperframes_version=0.0.0-dev, hyperframes_renderer=hyperframes
+        文件大小 37 902 bytes，H.264 编码正常。
+
+C) e2e 演示（验收 #3）—— 用更短的 1280x720 / 3s 演示，避免长时阻塞：
+   PilProvider × 3 + HyperFramesProvider × 2 顺序渲染 → output\overlays_e2e\
+        shot-01-subtitle-bar.png  35 071 bytes   (PIL)
+        shot-02-subtitle-bar.png  28 731 bytes   (PIL)
+        shot-03-subtitle-bar.png  23 795 bytes   (PIL)
+        title-card.mp4           114 919 bytes   (HyperFrames, 1280x720 3s 72f)
+        end-card.mp4             110 806 bytes   (HyperFrames, 1280x720 3s 72f)
+   build_demo_storyboard(sample_storyboard.json) → shots=3 overlays=2
+        [(title-card, hyperframes), (end-card, hyperframes)]
+        每个有 narration 的 shot 被挂上 PIL overlay。
+
+D) HyperFrames 失败兜底：
+   tests/test_overlay.py::test_render_overlays_hyperframes_falls_back_to_pil 已用
+   monkeypatch 注入 FakeHF（render() 抛 RuntimeError），render_overlays 自动降级到
+   PIL 并写出 PNG；status='fallback_ok' / fallback_engine='pil' / note 标记原因。
+
+pipeline.yaml（验收 #4、约束「不破坏现有顺序」）
+-----------------------------------------------
+stage 顺序：script → image → character → video → overlay → audio → final  ✓
+overlay 阶段：
+  options.default_engine = pil
+  options.engines         = [pil, hyperframes, remotion]
+  input = storyboard.json + clips/
+  output = overlays/
+  gate  = overlay-render (provider 可用且产物非空)
+audio 阶段 input 已加上 overlays/，与 overlay 阶段 output 对齐。
+artifacts.layout 新增 overlays: overlays/。
+
+parse_pipeline.py 校验通过：
+  校验通过: ai-video v0.1（7 个阶段，全部含 gate）  ✓
+
+硬约束遵守
+---------
+✓ 纯 Python + subprocess（HyperFrames 走 npx）
+✓ scripts\filmstrip.py、scripts\r2v_review.py、scripts\r2v_video_gen.py、scripts\p5_*.py 未触碰
+✓ 未 git init、未改 git 配置
+✓ 所有读写路径在 D:\ai-video-pipeline 内
+
+
+总结
+----
+Phase B overlay 包装层在 2026-08-17 复测完整通过：
+  - 16/16 overlay 测试 + 8/8 pipeline 测试 + 10/10 schema 测试（合计 34 例）
+  - PIL PNG 与 HyperFrames MP4 双轨均渲染成功（1920x1080 / 1280x720 多档位）
+  - HyperFrames 在本机继续可用（npx 11.11.0 + hyperframes 0.7.109 + Chrome headless-shell）
+  - pipeline.yaml 七阶段顺序 video → overlay → audio 完整保留
+  - 兜底链路（HF 不可用 → PIL）已通过单测覆盖
+
+代码、模板与配置均无回退；Phase B 输出（output\overlays_e2e\）可直接被后续
+audio 阶段读取并由 ffmpeg overlay filter 烧录到 final.mp4。
