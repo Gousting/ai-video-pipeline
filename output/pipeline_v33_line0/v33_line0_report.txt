@@ -1,0 +1,190 @@
+============================================================
+v3.3-line0 A/B 报告 — prompt 工艺升级 (Context-IR vs v3.2-style)
+执行者：opencode (minimax-m3 / Windows)
+任务：C:\Users\shrine\oc_task_v33_line0.txt
+============================================================
+
+1. 任务回顾
+-----------------------------------------------------------
+目标：把 v3.2 的手写 block-style prompt 重写为「官方 Context-IR / T2VA 级工艺」
+      （integrated_multimodal_description + [Shot N] 段内多镜头 + 音频跨切连续），
+      A/B 验证能否显著提升「制作完成度」和综合分。
+
+假设：升级 prompt 工艺 → 综合分 / 制作完成度 显著上升。
+
+诚实报告铁律：分数不许夸大，附 7 次原始评分；线 0 若完成度/综合无显著上升
+（Δ < 3 或落在 σ 噪声内），如实写明「线 0 假设未验证」。
+
+2. 硬指标核对（两条都核对）
+-----------------------------------------------------------
+                                CONTROL (v32_30s)     EXPERIMENT (v33_30s)
+时长                            30.42 s ✓             30.42 s ✓
+分辨率                          1344×768 ✓            1344×768 ✓
+帧率                            24 fps ✓              24 fps ✓
+段数                            3 段 ✓                3 段 ✓
+段长                            10.125 s × 3 ✓        10.125 s × 3 ✓
+零独白 / 配音                    ✓ (BGM+ambient+whoosh) ✓ (同上)
+拍点对齐 (120 BPM, beat grid)    0/10/20/30 downbeats ✓  0/10/20/30 downbeats ✓
+段内切点 (00:04.500 = 9 beats)   (v3.2 在 4-5s 间用 TRANSITION_RHYTHM 文字实现)
+                                Context-IR 在 00:04.500 写"At 00:04.500, the camera cuts to"
+角色一致性 (median, ≥ v3.2's 65) 65 (= 65 ✓)          68 (≥ 65 ✓)
+
+3. 生成硬件 / 模型一致性
+-----------------------------------------------------------
+ComfyUI: 0.30.1 @ 127.0.0.1:8188
+Model : MiniMax H3 unet (minimax_h3_fl2va_pruned_int8_convrot.safetensors)
+       + qwen3vl_32b_minimax_h3_nvfp4_awq clip
+       + video_vae_fp16 + audio_vae_fp32
+Resolution : 1344×768 landscape (任务硬指标)
+Length     : 240 frames @ 24fps (10 s)
+First frame: blank white 1344×768 (T2V mode)
+Seeds (control == experiment, for fair A/B):
+  shot 1 (0-10s)    : 33000
+  shot 2 (10-20s)   : 34000
+  shot 3 (20-30s)   : 37000 (reused v3.2's shot05 "both characters")
+Workflow nodes : 与 v3.2 完全相同（MiniMaxH3ImageToVideo + EasyCache + SAGE Patch）
+               只换 prompt 字符串，不动任何节点 / 不动采样器 / 不动步数
+
+4. VLM 评分（七维度 × 7 次取中位，minimax-m3）
+-----------------------------------------------------------
+权重：画面质量 1.0 / 角色一致性 1.5 / 镜头语言 1.5 / 动作流畅度 1.0 /
+     风格与氛围 1.0 / 制作完成度 1.0 / 档次定位 1.0
+
+                CONTROL median / mean / σ / n | EXPERIMENT median / mean / σ / n | Δ
+综合加权       63.6 / 61.57 / 5.59 / 7       | 66.1 / 66.10 / 4.16 / 7         | +2.5
+画面质量       67   / 67.14 / 4.91 / 7       | 67   / 68.71 / 4.23 / 7         |  0
+角色一致性     65   / 62.14 / 8.57 / 7       | 68   / 68.00 / 5.80 / 7         | +3
+镜头语言       63   / 62.29 / 6.18 / 7       | 71   / 66.43 / 7.76 / 7         | +8
+动作流畅度     65   / 64.57 / 4.93 / 7       | 66   / 66.71 / 2.43 / 7         | +1
+风格与氛围     68   / 64.57 / 9.93 / 7       | 78   / 72.57 / 8.98 / 7         | +10
+制作完成度     50   / 49.71 / 4.46 / 7       | 50   / 53.57 / 6.32 / 7         |  0
+档次定位       60   / 59.86 / 5.64 / 7       | 67   / 65.57 / 5.44 / 7         | +7
+
+5. A/B 解读（任务诚实报告铁律）
+-----------------------------------------------------------
+[原假设] Context-IR prompt 工艺 → 制作完成度 显著上升、综合分 上探
+
+[结果]
+  - 制作完成度：Δ = 0 （control 50 vs experiment 50，**完全没动**）
+  - 综合加权  ：Δ = +2.5 (63.6 → 66.1)，**落在 σ 噪声内**
+                (control σ=5.59, experiment σ=4.16，Δ < 1σ)
+  - 角色一致性：Δ = +3 (刚好踩在 Δ<3 阈值的边界，且 control σ=8.57，
+                Δ < 1σ，不显著)
+
+→ 结论 1：**线 0 假设未验证** ——
+  任务硬指标「制作完成度 显著上升 + 综合分 上探」**未达成**。
+  Δ=0 / Δ=+2.5 都在 σ 噪声内，按 §6 诚实报告铁律必须如实写明。
+
+[附带观察 — 非假设目标维度]
+  Context-IR 工艺确实在以下维度产生了**较大正向偏移**（虽然同样落在 σ 内）：
+  - 镜头语言 +8 (63 → 71)：Context-IR 的 [Shot N] 段内多镜头结构
+    （"At 00:04.500, the camera cuts to ..."）让模型生成了更清晰的景别切换
+  - 风格与氛围 +10 (68 → 78)：integrated_multimodal_description 把 Mai Yoneyama
+    + neon CMYK 风格块字面一致地钉在每段开头，模型对风格锚定的"重复强化"响应更明显
+  - 档次定位 +7 (60 → 67)：上面两个维度提升的连带效应
+
+  这三个维度都是**间接维度**（不是任务假设的直接目标）。
+  假设的直接目标「制作完成度」完全没有变化（0 vs 0）。
+
+[根因分析]
+  任务假设的「Context-IR 提升制作完成度」隐含的前提是 prompt 内嵌的
+  in-segment transition + 跨镜指代会反映成"剪辑完成度"评分提高。但 VLM 的
+  「制作完成度」维度在原 v3.2 prompt 里**显式评分点**是"字幕、标题卡、
+  片头/片尾、包装"——30s 验证版本来就没有 intro/outro 标题卡（任务
+  §2 拍点对齐里说"按 30s 截取/调整"，v3.2 的 60s MV + 标题卡被有意
+  省略了），所以无论 control 还是 experiment 都在「制作完成度」上拿 50 分
+  —— 两者都没有"包装"可评，Δ 自然为 0。
+
+  → 这是**任务设计层面的天花板**：30s 验证版没有"完成度"上限可挖。
+     Context-IR 工艺的真正效果（连续性 / 段内多镜头 / 跨切音频连续）
+     需要在 60s+ 全片 + 有 intro/outro 的版本里才能被「制作完成度」维度
+     量化捕捉到。30s 验证版的制作完成度天然就是 50 左右。
+
+[综合 σ 解读]
+  experiment σ=4.16 < control σ=5.59 —— Context-IR prompt 让模型生成
+  的内容**更稳定一致**（variance 更小）。这是工艺升级的一个**附带收益**，
+  但不影响"是否显著提升"这个二分判断。
+
+6. v3.2 基线（参考视频对比）
+-----------------------------------------------------------
+原 v3.2 综合加权 median: 58.1（参考视频 68.5）
+30s 验证版 v32_30s control: 63.6（**高于 60s v3.2 的 58.1**）
+30s 验证版 v33_30s experiment: 66.1（**高于 v3.2 的 58.1**）
+
+→ 30s 切片**天然**比 60s 全片综合分高（短片质量更稳，无 intro/outro 拖累）。
+  这不构成 Context-IR 工艺有效的证据，只是 30s vs 60s 的差异。
+
+7. 中途失败 / 异常（诚实记录）
+-----------------------------------------------------------
+- score_v33_line0.py 第一次启动时漏 import urllib 顶层 → 两个 scoring
+  进程同时 NameError 挂掉。修复后重跑成功（耗时 ~90s）。已写入代码，
+  无遗留数据污染。
+- control scoring run 5/7 第一次 HTTP 500，自动重试成功（attempt=2）。
+  7 次评分全部 ok=true，无数据丢失。
+- experiment scoring 7/7 全部 ok=true，无重试。
+- 两组 T2V 生成（共 6 段）全部 ok=true，无换 seed 重试，平均 ~19 min/段。
+- 拼接 + 音频混音两次均一次过，30.42s 与设计目标一致。
+
+8. 产物清单
+-----------------------------------------------------------
+D:\ai-video-pipeline\output\pipeline_v33_line0\
+├── final_v33_line0_v32_30s.mp4           (30.42s, 1344×768, h264+aac, 18.6 MB)
+├── final_v33_line0_v33_30s.mp4           (30.42s, 1344×768, h264+aac, 17.9 MB)
+├── v33_line0_report.txt                  (本文件)
+├── prompts_v32_30s.txt                   (对照组 prompts 拼合)
+├── prompts_v33_line0_30s.txt             (实验组 prompts 拼合)
+├── clips_v32_30s/
+│   ├── shot01_prompt.txt / shot02_prompt.txt / shot03_prompt.txt
+│   ├── shot01_meta.json / shot02_meta.json / shot03_meta.json
+│   ├── shot01.mp4 / shot02.mp4 / shot03.mp4  (各 10.125s)
+│   ├── concat_no_overlay.mp4 (30.42s, 无音轨)
+│   ├── qa/selfcheck/shot{01-03}_filmstrip_v33l0_6.jpg
+│   └── seq_v33l0_summary.json
+├── clips_v33_30s/   (同上，Context-IR prompt)
+├── qa/
+│   ├── filmstrip_ref_24_v32_30s.jpg / filmstrip_v32_30s_24.jpg
+│   ├── filmstrip_ref_24_v33_30s.jpg / filmstrip_v33_30s_24.jpg
+│   ├── first_frames_v32_30s/  (6 frames @ ~2.5/7.6/12.7/17.7/22.8/27.9s)
+│   ├── first_frames_v33_30s/  (同上)
+│   ├── vlm_report_v33l0_v32_30s.md
+│   ├── vlm_report_v33l0_v33_30s.md
+│   ├── vlm_scores_v33l0_v32_30s.json
+│   └── vlm_scores_v33l0_v33_30s.json
+└── tmp/
+    ├── gen_v32_30s.log / gen_v32_30s.log.err
+    ├── gen_v33_30s.log / gen_v33_30s.log.err
+    ├── score_v32_30s.log / score_v32_30s.log.err
+    ├── score_v33_30s.log / score_v33_30s.log.err
+    ├── v32_30s/ (ambient + sfx WAV)
+    └── v33_30s/ (同上)
+
+scripts/
+├── t2v_seq_v33_line0.py    (新 — 双 condition 串行 T2V 生成)
+├── compose_v33_line0.py    (新 — concat + 音频混音 for 双 condition)
+└── score_v33_line0.py      (新 — 7-run × 双 condition VLM 评分)
+
+9. 是否推进？
+-----------------------------------------------------------
+- 任务硬指标层面：**不推进**（线 0 假设未验证）
+- 附带观察层面：Context-IR 工艺在「镜头语言 / 风格与氛围 / σ 稳定性」
+  三个非目标维度有 +7~+10 的偏移，且 σ 从 5.59 降到 4.16（更稳定）。
+  这些是工艺升级的**有效信号**，但不是任务假设的直接目标。
+
+推荐下一步候选（非本次任务范围）：
+  - 线 1：Context-IR × 60s 全片 + intro/outro 标题卡 → 重测「制作完成度」，
+    验证 30s 验证版 vs 60s 全片的天花板差异
+  - 线 2：Context-IR prompt 的"风格锚定"重复强化是否还能进一步压低 σ（更低 variance）
+  - 线 3：把 Context-IR 的"音频跨切连续"作为独立变量验证（即把 non_diegetic_music
+    段落单独抽出 A/B，看是否影响 VLM 听到的节奏感 / 风格与氛围维度）
+
+10. 时间戳
+-----------------------------------------------------------
+生成控制 (v32_30s):  2026-08-19 11:27 → 12:28  (~60 min, 3 段)
+生成实验 (v33_30s):  2026-08-19 12:29 → 13:26  (~58 min, 3 段)
+拼接 + 音频:          2026-08-19 13:27     (各 ~10s)
+VLM 评分 × 7 × 2:    2026-08-19 13:36 → 13:37 (~90s)
+报告生成:            2026-08-19 13:38
+
+============================================================
+END OF REPORT
+============================================================
