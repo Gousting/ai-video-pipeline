@@ -276,7 +276,7 @@ v3.5 转场治理 自检 (validate_v35.py)
 
 ```
 Branch: v35
-Commit:  <本次 commit hash>（见 git log）
+Commit:  3686b2d（v3.5-line0: 转场治理 per 任务书 v3.5）
 Files:
   scripts/storyboard_v35.py        (新增, py_compile 通过)
   scripts/transition_planner_v35.py (新增, py_compile 通过)
@@ -284,6 +284,8 @@ Files:
   scripts/validate_v35.py          (新增, py_compile 通过)
   output/pipeline_v35/sb/storyboard_v35.json     (生成产物)
   output/pipeline_v35/sb/transition_plan_v35.json (生成产物)
+  output/pipeline_v35/sb/transition_plan_v35_dryrun.json (dry-run 产物)
+  output/pipeline_v35/final_v35_dryrun_meta.json (compose dry-run 元数据)
   v35_report.txt                                (本报告)
 ```
 
