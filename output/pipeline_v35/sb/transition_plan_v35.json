@@ -1,0 +1,202 @@
+{
+  "plan_meta": {
+    "planner_version": "v3.5",
+    "pipeline": "ai-video-pipeline v3.5",
+    "allowed_types": [
+      "hard_cut",
+      "dissolve",
+      "fadeblack",
+      "fade"
+    ],
+    "fancy_budget_max": 2,
+    "fancy_types": [
+      "fadeblack",
+      "fade"
+    ],
+    "plain_types": [
+      "hard_cut",
+      "dissolve"
+    ],
+    "n_shots": 6,
+    "n_transitions": 5,
+    "total_duration_sec": 60,
+    "type_counts": {
+      "hard_cut": 3,
+      "dissolve": 2,
+      "fadeblack": 0,
+      "fade": 0
+    },
+    "deterministic": true,
+    "rule_summary": [
+      "score>=6 + motion continuation → dissolve (0.4s, plain)",
+      "score>=6 (no motion) → dissolve (0.3s, plain)",
+      "score 3..5 → short dissolve (0.3s, plain)",
+      "score<3 + strong style continuation → fade (fancy, budget)",
+      "score<3 + motion continuation + style unity → fadeblack (fancy, budget)",
+      "score<3 default → hard_cut (0.0s)",
+      "fancy (fadeblack+fade) global <= 2"
+    ]
+  },
+  "transitions": [
+    {
+      "at_sec": 10.0,
+      "from_shot": 1,
+      "to_shot": 2,
+      "transition_type": "hard_cut",
+      "duration": 0.0,
+      "reason": "strong content contrast (score=2); swap character focus (senior → junior); shared objects: hair; use hard_cut (default)",
+      "score": 2,
+      "signals_detail": {
+        "char": {
+          "score": 0,
+          "reason": "swap character focus (senior → junior)"
+        },
+        "objects": {
+          "score": 1,
+          "reason": "shared objects: hair"
+        },
+        "colors": {
+          "score": 1,
+          "reason": "shared colors: halftone"
+        },
+        "location": {
+          "score": 0,
+          "reason": "no shared location"
+        },
+        "motion": {
+          "score": 0,
+          "reason": "no motion continuation"
+        },
+        "total": 2
+      }
+    },
+    {
+      "at_sec": 20.0,
+      "from_shot": 2,
+      "to_shot": 3,
+      "transition_type": "hard_cut",
+      "duration": 0.0,
+      "reason": "strong content contrast (score=1); swap character focus (junior → senior); shared objects: hair; use hard_cut (default)",
+      "score": 1,
+      "signals_detail": {
+        "char": {
+          "score": 0,
+          "reason": "swap character focus (junior → senior)"
+        },
+        "objects": {
+          "score": 1,
+          "reason": "shared objects: hair"
+        },
+        "colors": {
+          "score": 0,
+          "reason": "no shared colors"
+        },
+        "location": {
+          "score": 0,
+          "reason": "no shared location"
+        },
+        "motion": {
+          "score": 0,
+          "reason": "no motion continuation"
+        },
+        "total": 1
+      }
+    },
+    {
+      "at_sec": 30.0,
+      "from_shot": 3,
+      "to_shot": 4,
+      "transition_type": "hard_cut",
+      "duration": 0.0,
+      "reason": "strong content contrast (score=1); swap character focus (senior → junior); no shared objects; use hard_cut (default)",
+      "score": 1,
+      "signals_detail": {
+        "char": {
+          "score": 0,
+          "reason": "swap character focus (senior → junior)"
+        },
+        "objects": {
+          "score": 0,
+          "reason": "no shared objects"
+        },
+        "colors": {
+          "score": 1,
+          "reason": "shared colors: lemon yellow"
+        },
+        "location": {
+          "score": 0,
+          "reason": "no shared location"
+        },
+        "motion": {
+          "score": 0,
+          "reason": "no motion continuation"
+        },
+        "total": 1
+      }
+    },
+    {
+      "at_sec": 40.0,
+      "from_shot": 4,
+      "to_shot": 5,
+      "transition_type": "dissolve",
+      "duration": 0.3,
+      "reason": "moderate continuity (score=4); introduce partner (junior → both); objects: no shared objects; use short dissolve (plain)",
+      "score": 4,
+      "signals_detail": {
+        "char": {
+          "score": 1,
+          "reason": "introduce partner (junior → both)"
+        },
+        "objects": {
+          "score": 0,
+          "reason": "no shared objects"
+        },
+        "colors": {
+          "score": 3,
+          "reason": "shared colors×3: halftone, lemon yellow, magenta"
+        },
+        "location": {
+          "score": 0,
+          "reason": "no shared location"
+        },
+        "motion": {
+          "score": 0,
+          "reason": "no motion continuation"
+        },
+        "total": 4
+      }
+    },
+    {
+      "at_sec": 50.0,
+      "from_shot": 5,
+      "to_shot": 6,
+      "transition_type": "dissolve",
+      "duration": 0.4,
+      "reason": "strong content continuity (score=12); same group scene (both); both walking (motion continuation); objects: shared objects×3: blazer, cardigan, frame; use dissolve (plain)",
+      "score": 12,
+      "signals_detail": {
+        "char": {
+          "score": 3,
+          "reason": "same group scene (both)"
+        },
+        "objects": {
+          "score": 3,
+          "reason": "shared objects×3: blazer, cardigan, frame"
+        },
+        "colors": {
+          "score": 3,
+          "reason": "shared colors×8: cream, cyan, fluorescent green, halftone"
+        },
+        "location": {
+          "score": 1,
+          "reason": "shared location: frame"
+        },
+        "motion": {
+          "score": 2,
+          "reason": "both walking (motion continuation)"
+        },
+        "total": 12
+      }
+    }
+  ]
+}

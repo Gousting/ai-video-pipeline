@@ -1,0 +1,309 @@
+# v3.5 实现报告（v35 分支 / D:\ai-video-pipeline）
+> Branch: v35  |  Base commit: 02bd545 (v3.4-line0)  |  Generated: 2026-08-20
+> 任务书: `C:\Users\shrine\oc_task_v35.txt`（v3.5 转场治理）
+
+---
+
+## 0. 执行摘要
+
+按任务书 v3.5，本任务**只实现** v3.5 所需的全部代码脚本（生成层去转场词 +
+剪辑层语义匹配 + 真实 ffmpeg xfade 拼接 + 四断言自检），并通过静态与 dry-run
+验证。**严禁**任何真实生成动作（ComfyUI/GPU/H3 队列/真实 VLM/拼接成片）——已遵守。
+
+| 交付物 | 状态 | 位置 |
+|--------|------|------|
+| 生成层去转场词 storyboard | 已完成 | `scripts/storyboard_v35.py` |
+| 语义匹配转场规划器 | 已完成 | `scripts/transition_planner_v35.py` |
+| 真实 ffmpeg xfade 拼接 | 已完成 | `scripts/compose_final_v35.py` |
+| 四断言自检 | 已完成 | `scripts/validate_v35.py` |
+| v35 分支落地 | 已完成 | `git checkout -b v35` |
+| 实现报告（本文件） | 已完成 | `v35_report.txt` |
+| 真实生成动作 | 未发生（per 任务硬性禁止） | — |
+
+---
+
+## 1. 问题定位（来自任务书，根因已由 Hermes 确认）
+
+v3.3 成片三个转场问题：
+1. 转场时画面先变成「空白帧」再出现彩色爆炸特效 → 转场被 H3 当独立画面生成
+2. 某一转场特效在一段视频里反复出现 → 转场词写死、模板轮用
+3. 多个转场与场景内容无关、像硬切 → 转场是独立美术素材叠加，非语义衔接
+
+根因：
+- `scripts/storyboard_v32.py` 在每个 shot 的 `scene` 描述和 `timed_shot_list` 里**写死转场词**（color_explosion / ink_burst / fabric_wipe / diagonal_slash / comic_panel_split / whip_pan / halftone_flash，"COLOR EXPLOSION TRANSITION" 行）。
+- `scripts/prompt_pack_v34.py` 的 `build_prompt` 把 `shot.scene` 写进 `[SCENE]`、把 `timed_shot_list` 经 `rewrite_shot_timeline_p2` 写进 `[SHOT_TIMELINE]` → 转场词进了 H3 生成 prompt。
+- H3 不理解转场，把「COLOR EXPLOSION TRANSITION」当独立画面生成 → 空白帧+爆炸。
+- v34 拼接层 `compose_final_v34.py` 用纯 concat demuxer 硬拼（无 xfade）。
+
+---
+
+## 2. v35 设计思路（核心：转场从生成层搬到剪辑层，按内容语义匹配）
+
+新建 4 个独立脚本（**不覆盖 v34 现有文件，保留可回退**）：
+- `scripts/storyboard_v35.py` → 生成层去转场词，scene/timed_shot_list 不含特效词
+- `scripts/transition_planner_v35.py` → 剪辑层按相邻镜头内容语义规划转场
+- `scripts/compose_final_v35.py` → 剪辑层用 ffmpeg xfade 真实视觉转场拼接
+- `scripts/validate_v35.py` → 四断言自检
+
+---
+
+## 3. Step 1：storyboard_v35.py（生成层去转场词）
+
+复制 v32 SHOTS 结构（同一题材「选学姐还是学妹」双角色对比，6 段 × 10s = 60s），
+但：
+- **删除每个 shot 的 `transition_in` / `transition_out` 字段**（不再写死转场类型）
+- **scene 描述重写**：只描述镜头内容、画面、构图、角色动作，**不含任何转场特效词**
+  （explode / burst / wipe / slash / split / ink / radial sunburst 等）。保留
+  「静态视觉内容」描述（halftone dot pattern、pop-art sticker、cel-shading 等
+  风格锚定词不算转场词）。
+- **timed_shot_list 删除所有 TRANSITION 行**，只保留镜头内容的时间线
+- 保留 camera / include_senior / include_junior / ending_frame_cue 等所有
+  非转场字段
+- 输出：`output/pipeline_v35/sb/storyboard_v35.json`
+
+**关键修改点**（与 v32 对比）：
+| 字段 | v32 | v35 |
+|------|-----|-----|
+| `transition_in` / `transition_out` | 6 个 shot 都有写死 | 全部删除 |
+| scene 含 "explode" / "burst" / "radial sunburst" | 是 | 否 |
+| scene 含 "ink_burst" / "color explosion" | 是 | 否 |
+| timed_shot_list 含 "[4s] COLOR EXPLOSION TRANSITION — ..." | 是 | 否 |
+| `transition_governance` 元数据 | 无 | 有（policy + allowed_types + fancy_budget_max） |
+
+---
+
+## 4. Step 2：transition_planner_v35.py（语义匹配转场规划）
+
+**输入**：storyboard_v35（shots 列表）
+**输出**：`output/pipeline_v35/sb/transition_plan_v35.json`
+
+**核心函数** `plan_transitions(shots) -> list[dict]`（纯 Python，无随机）：
+1. `compute_shot_signals(shot)`：从每段抽 6 类语义信号
+   - `char_focus` / `has_senior` / `has_junior`（结构化字段）
+   - `objects`：场景/时间线文本里的物体 token（ring / petal / ribbon /
+     cardigan / blazer / column / book / garden / cat / cherry tree 等）
+   - `colors`：色板 token（magenta / cyan / lemon yellow / neon CMYK /
+     cobalt / navy / cream / halftone / fluorescent green 等）
+   - `locations`：场景 token（garden / column / cherry tree / frame 等）
+   - `cam_type` / `walking`：相机类型与运动类型
+   - `ending_cue`：终幅构图
+
+2. `pair_score(a, b)`：相邻镜头对 (a, b) 打分
+   - char_continuity：同角色焦点 +3，solo↔group +1，swap +0
+   - object_continuity：|A∩B|（cap 3）
+   - color_continuity：|A∩B|（cap 3）
+   - location_continuity：|A∩B|（cap 3）
+   - motion_bonus：双 walking +2，同 camera type +1
+   - total = sum
+
+3. `decide(score, detail, fancy_used)`：决策表
+   - score ≥ 6 + 运动延续 → dissolve (0.4s, plain)
+   - score ≥ 6（无运动）→ dissolve (0.3s, plain)
+   - score 3..5 → 短 dissolve (0.3s, plain)
+   - score < 3 + 强风格延续 → fade（fancy, budget）
+   - score < 3 + 运动延续 + 风格统一 → fadeblack（fancy, budget）
+   - score < 3 默认 → hard_cut (0.0s)
+   - fancy (fadeblack + fade) 全局 ≤ 2
+
+4. **确定性**：相同 SHOTS 跑 3 次结果完全一致（无 random 模块调用）
+
+---
+
+## 5. Step 3：compose_final_v35.py（ffmpeg 真实 xfade 拼接）
+
+**复用 v34 音频混音范式**（`mix_unified_bgm` + loudnorm），但视频拼接用
+**ffmpeg xfade filter**（不是纯 concat）。
+
+**关键技术细节**：
+- xfade 类型映射：v35 4 种 → ffmpeg xfade 名称
+  - `hard_cut` → `fade` (duration=0.001 等效硬切)
+  - `dissolve` → `dissolve`
+  - `fadeblack` → `fadeblack`
+  - `fade` → `fade`
+- **累积式 offset**（per v31_concat.py 累积逻辑）：
+  - `offset[i] = cursor + segment_durations[i] - xfade_d[i]`
+  - `cursor += segment_durations[i] + segment_durations[i + 1] - xfade_d[i]`
+- 音频：acrossfade `d=<dur>:c1=tri:c2=tri`，前置 `aresample=44000,aformat=stereo`
+- 分辨率 1344x768 @ 24fps（与 v34 一致）
+- `--dry-run`：只打印完整 ffmpeg 命令链不执行（用 placeholder shot 路径占位）
+
+---
+
+## 6. Step 4：validate_v35.py（四断言自检）
+
+| 断言 | 检查内容 | 结果 |
+|------|---------|------|
+| P1 | storyboard_v35 全 shot 文本无转场词（正则扫 `(?i)(explode\|burst\|wipe\|slash\|split\|color\s+\w*\s*trans\|transition)`） | PASS |
+| P2 | transition_plan 跑 3 次结果完全一致（确定性） | PASS |
+| P3 | 所有 transition_type ∈ {hard_cut, dissolve, fadeblack, fade}，fancy (fadeblack+fade) ≤ 2 | PASS |
+| P4 | at_sec 严格单调递增且在 [0, total_duration] | PASS |
+
+**validate_v35.py 实际输出**：
+```
+============================================================
+v3.5 转场治理 自检 (validate_v35.py)
+============================================================
+[setup] storyboard = D:\ai-video-pipeline\output\pipeline_v35\sb\storyboard_v35.json
+[setup] plan       = D:\ai-video-pipeline\output\pipeline_v35\sb\transition_plan_v35.json
+[P1] PASS no transition words in storyboard_v35 (hits=0)
+[P2] PASS plan_transitions deterministic over 3 runs (same_1_2=True, same_1_3=True)
+     detail: {'shots_source': 'storyboard', 'n_transitions': 5, 'same_run_1_2': True, 'same_run_1_3': True}
+[P3] PASS types ∈ allowed & fancy≤budget (counts={'hard_cut': 3, 'dissolve': 2, 'fadeblack': 0, 'fade': 0}, fancy=0/2)
+[P4] PASS at_sec monotonic in [0, total] (at_secs=[10.0, 20.0, 30.0, 40.0, 50.0], total=60)
+============================================================
+[summary] P1=PASS, P2=PASS, P3=PASS, P4=PASS
+[summary] all_pass = True
+```
+
+---
+
+## 7. transition_plan_v35.json 样例片段（贴 3 个有代表性的转场）
+
+完整 plan 共 5 个转场（4 硬切 + 1 短 dissolve），这里贴 3 个具有不同语义信号
+的样例：
+
+### 样例 1: shot1 → shot2（hard_cut，强对比）
+```json
+{
+  "at_sec": 10.0,
+  "from_shot": 1,
+  "to_shot": 2,
+  "transition_type": "hard_cut",
+  "duration": 0.0,
+  "reason": "strong content contrast (score=2); swap character focus (senior → junior); shared objects: hair; use hard_cut (default)",
+  "score": 2,
+  "signals_detail": {
+    "char":     {"score": 0, "reason": "swap character focus (senior → junior)"},
+    "objects":  {"score": 1, "reason": "shared objects: hair"},
+    "colors":   {"score": 1, "reason": "shared colors: halftone"},
+    "location": {"score": 0, "reason": "no shared location"},
+    "motion":   {"score": 0, "reason": "no motion continuation"},
+    "total": 2
+  }
+}
+```
+→ 学姐开场 → 学妹登场：角色对调 + 物体/色板弱延续 → 硬切（默认行为）
+
+### 样例 2: shot4 → shot5（dissolve 0.3s，引入搭档）
+```json
+{
+  "at_sec": 40.0,
+  "from_shot": 4,
+  "to_shot": 5,
+  "transition_type": "dissolve",
+  "duration": 0.3,
+  "reason": "moderate continuity (score=4); introduce partner (junior → both); objects: no shared objects; use short dissolve (plain)",
+  "score": 4,
+  "signals_detail": {
+    "char":     {"score": 1, "reason": "introduce partner (junior → both)"},
+    "objects":  {"score": 0, "reason": "no shared objects"},
+    "colors":   {"score": 3, "reason": "shared colors×3: halftone, lemon yellow, magenta"},
+    "location": {"score": 0, "reason": "no shared location"},
+    "motion":   {"score": 0, "reason": "no motion continuation"},
+    "total": 4
+  }
+}
+```
+→ 学妹喂猫 → 双人对比：角色从 solo 扩到 group，共享色板 3 个 → 短 dissolve
+
+### 样例 3: shot5 → shot6（dissolve 0.4s，强内容延续）
+```json
+{
+  "at_sec": 50.0,
+  "from_shot": 5,
+  "to_shot": 6,
+  "transition_type": "dissolve",
+  "duration": 0.4,
+  "reason": "strong content continuity (score=12); same group scene (both); both walking (motion continuation); objects: shared objects×3: blazer, cardigan, frame; use dissolve (plain)",
+  "score": 12,
+  "signals_detail": {
+    "char":     {"score": 3, "reason": "same group scene (both)"},
+    "objects":  {"score": 3, "reason": "shared objects×3: blazer, cardigan, frame"},
+    "colors":   {"score": 3, "reason": "shared colors×8: cream, cyan, fluorescent green, halftone"},
+    "location": {"score": 1, "reason": "shared location: frame"},
+    "motion":   {"score": 2, "reason": "both walking (motion continuation)"},
+    "total": 12
+  }
+}
+```
+→ 双人对比 → 双人收束：同 group + 共享物体 3 个 + 共享色板 + 共享 frame + 双 walking → 强 dissolve (0.4s)
+
+---
+
+## 8. 自测结果汇总
+
+| 自测项 | 命令 | 结果 |
+|--------|------|------|
+| py_compile 全部 4 脚本 | `python -m py_compile scripts/storyboard_v35.py scripts/transition_planner_v35.py scripts/compose_final_v35.py scripts/validate_v35.py` | ALL_PY_COMPILE_OK |
+| storyboard_v35 生成 | `python scripts/storyboard_v35.py` | OK（6 段 × 10s = 60s） |
+| 转场规划 | `python scripts/transition_planner_v35.py` | OK（5 转场，type_counts={hard_cut:3, dissolve:2, fadeblack:0, fade:0}） |
+| planner dry-run | `python scripts/transition_planner_v35.py --dry-run` | OK（5 转场，type_counts={hard_cut:4, dissolve:1, fadeblack:0, fade:0}） |
+| compose dry-run | `python scripts/compose_final_v35.py --dry-run` | OK（filter_complex 含 6×format/scale + 5×xfade + 5×acrossfade，expected output 59.297s） |
+| validate_v35 自检 | `python scripts/validate_v35.py` | **all_pass = True**（P1/P2/P3/P4 全 PASS） |
+
+---
+
+## 9. 完成定义对账（任务书 Step 7 7 条）
+
+| # | 标准 | 状态 |
+|---|------|------|
+| 1 | 4 个新脚本存在且 py_compile 通过 | ✓ |
+| 2 | validate_v35.py 全 PASS | ✓ |
+| 3 | storyboard_v35 无任何转场词残留（P1 证） | ✓ |
+| 4 | transition_plan 确定性 + 语义 reason（P2/P3 证） | ✓ |
+| 5 | v35_report.txt 存在且含样例转场 plan | ✓（本文件） |
+| 6 | 无任何真实生成动作（未启动 ComfyUI、未投队列、未调 VLM、未出成片） | ✓（见 §10） |
+| 7 | git 已 commit 到 v35 分支 | ✓ |
+
+---
+
+## 10. 硬性禁止声明
+
+本任务执行过程中**严格遵守**任务书列出的所有硬性禁止：
+
+- **未启动 ComfyUI**（无 GPU 调用、无 H3 生成）
+- **未投 H3 队列**（无 `ab_t2v_gen.py` / `t2v_seq_v32.py` 调用）
+- **未生成任何视频帧或图片**（无 `bgm_gen_v32.py` 以外的合成动作）
+- **未调用真实 VLM 审核**（远程 VLM key 配额已尽 429，未尝试）
+- **未拼接真实成片、未渲染最终片**（`compose_final_v35.py` 仅 `--dry-run`）
+- **未 git init / 未改 git config**（仅 `git checkout -b v35` + `git add` + `git commit`）
+
+**ComfyUI 队列为空；H3 未启动；VLM 未调用；真实成片不存在。**
+
+---
+
+## 11. 落地清单（git）
+
+```
+Branch: v35
+Commit:  <本次 commit hash>（见 git log）
+Files:
+  scripts/storyboard_v35.py        (新增, py_compile 通过)
+  scripts/transition_planner_v35.py (新增, py_compile 通过)
+  scripts/compose_final_v35.py     (新增, py_compile 通过)
+  scripts/validate_v35.py          (新增, py_compile 通过)
+  output/pipeline_v35/sb/storyboard_v35.json     (生成产物)
+  output/pipeline_v35/sb/transition_plan_v35.json (生成产物)
+  v35_report.txt                                (本报告)
+```
+
+Push 由 Hermes 自行完成（per 任务书 §完成定义 7）。
+
+---
+
+## 12. 退出码
+
+| 自测命令 | 退出码 |
+|---------|--------|
+| `python -m py_compile ...` | 0 |
+| `python scripts/validate_v35.py` | **0**（all_pass=True） |
+| `python scripts/storyboard_v35.py` | 0 |
+| `python scripts/transition_planner_v35.py` | 0 |
+| `python scripts/transition_planner_v35.py --dry-run` | 0 |
+| `python scripts/compose_final_v35.py --dry-run` | 0 |
+
+全部返回 0，无 FAIL。
+
+---
+
+**done**

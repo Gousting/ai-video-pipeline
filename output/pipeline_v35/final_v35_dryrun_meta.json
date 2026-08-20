@@ -1,0 +1,65 @@
+{
+  "compose_phase": "compose_final_v35",
+  "pipeline_version": "v3.5",
+  "clips_dir": "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips",
+  "plan_path": "D:\\ai-video-pipeline\\output\\pipeline_v35\\sb\\transition_plan_v35.json",
+  "input_paths": [
+    "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot01.mp4",
+    "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot02.mp4",
+    "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot03.mp4",
+    "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot04.mp4",
+    "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot05.mp4",
+    "D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot06.mp4"
+  ],
+  "segment_durations_sec": [
+    10.0,
+    10.0,
+    10.0,
+    10.0,
+    10.0,
+    10.0
+  ],
+  "transitions": [
+    {
+      "at_sec": 10.0,
+      "type": "hard_cut",
+      "duration": 0.0,
+      "reason": "strong content contrast (score=2); swap character focus (senior → junior); shared objects: hair; use hard_cut (default)"
+    },
+    {
+      "at_sec": 20.0,
+      "type": "hard_cut",
+      "duration": 0.0,
+      "reason": "strong content contrast (score=1); swap character focus (junior → senior); shared objects: hair; use hard_cut (default)"
+    },
+    {
+      "at_sec": 30.0,
+      "type": "hard_cut",
+      "duration": 0.0,
+      "reason": "strong content contrast (score=1); swap character focus (senior → junior); no shared objects; use hard_cut (default)"
+    },
+    {
+      "at_sec": 40.0,
+      "type": "dissolve",
+      "duration": 0.3,
+      "reason": "moderate continuity (score=4); introduce partner (junior → both); objects: no shared objects; use short dissolve (plain)"
+    },
+    {
+      "at_sec": 50.0,
+      "type": "dissolve",
+      "duration": 0.4,
+      "reason": "strong content continuity (score=12); same group scene (both); both walking (motion continuation); objects: shared objects×3: blazer, cardigan, frame; use dissolve (plain)"
+    }
+  ],
+  "output": "D:\\ai-video-pipeline\\output\\pipeline_v35\\final_v35.mp4",
+  "expected_output_duration_sec": 59.297,
+  "ffmpeg_filter_complex": "[0:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v0];\n[0:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a0];\n[1:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v1];\n[1:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a1];\n[2:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v2];\n[2:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a2];\n[3:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v3];\n[3:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a3];\n[4:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v4];\n[4:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a4];\n[5:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v5];\n[5:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a5];\n[v0][v1]xfade=transition=fade:duration=0.001:offset=9.999[vout0];\n[a0][a1]acrossfade=d=0.001:c1=tri:c2=tri[aout0];\n[vout0][v2]xfade=transition=fade:duration=0.001:offset=29.998[vout1];\n[aout0][a2]acrossfade=d=0.001:c1=tri:c2=tri[aout1];\n[vout1][v3]xfade=transition=fade:duration=0.001:offset=49.997[vout2];\n[aout1][a3]acrossfade=d=0.001:c1=tri:c2=tri[aout2];\n[vout2][v4]xfade=transition=dissolve:duration=0.300:offset=69.697[vout3];\n[aout2][a4]acrossfade=d=0.300:c1=tri:c2=tri[aout3];\n[vout3][v5]xfade=transition=dissolve:duration=0.400:offset=89.297[vout4];\n[aout3][a5]acrossfade=d=0.400:c1=tri:c2=tri[aout4]",
+  "ffmpeg_cmd": "ffmpeg -y -i D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot01.mp4 -i D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot02.mp4 -i D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot03.mp4 -i D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot04.mp4 -i D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot05.mp4 -i D:\\ai-video-pipeline\\output\\pipeline_v35\\clips\\shot06.mp4 -filter_complex [0:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v0];\n[0:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a0];\n[1:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v1];\n[1:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a1];\n[2:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v2];\n[2:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a2];\n[3:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v3];\n[3:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a3];\n[4:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v4];\n[4:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a4];\n[5:v]format=yuv420p,scale=1344:768:flags=lanczos,setsar=1:1,fps=24[v5];\n[5:a]aresample=44000,aformat=sample_rates=44000:channel_layouts=stereo[a5];\n[v0][v1]xfade=transition=fade:duration=0.001:offset=9.999[vout0];\n[a0][a1]acrossfade=d=0.001:c1=tri:c2=tri[aout0];\n[vout0][v2]xfade=transition=fade:duration=0.001:offset=29.998[vout1];\n[aout0][a2]acrossfade=d=0.001:c1=tri:c2=tri[aout1];\n[vout1][v3]xfade=transition=fade:duration=0.001:offset=49.997[vout2];\n[aout1][a3]acrossfade=d=0.001:c1=tri:c2=tri[aout2];\n[vout2][v4]xfade=transition=dissolve:duration=0.300:offset=69.697[vout3];\n[aout2][a4]acrossfade=d=0.300:c1=tri:c2=tri[aout3];\n[vout3][v5]xfade=transition=dissolve:duration=0.400:offset=89.297[vout4];\n[aout3][a5]acrossfade=d=0.400:c1=tri:c2=tri[aout4] -map [vout4] -map [aout4] -c:v libx264 -crf 20 -preset fast -c:a aac -b:a 192k -ar 44000 -r 24 -movflags +faststart D:\\ai-video-pipeline\\output\\pipeline_v35\\final_v35.mp4",
+  "bgm_path": "D:\\ai-video-pipeline\\output\\pipeline_v35\\music\\bgm_v35.wav",
+  "acrossfade_sr": 44000,
+  "bg_final_sr": 32000,
+  "fps": 24,
+  "resolution": "1344:768",
+  "dry_run": true,
+  "generated_at": "2026-08-20T09:38:34"
+}
