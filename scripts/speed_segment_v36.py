@@ -66,51 +66,59 @@ def ffprobe_duration(path: Path) -> float:
 
 def build_filter_for_window(window_list: list[dict], beat_period: float,
                              *, with_rife: bool = False) -> str:
-    """构造多窗口混合 setpts 链。
+    """构造多窗口 trim + setpts + concat 滤镜链（filter_complex 风格）。
 
-    窗口格式：
-      {kind, start_beat, end_beat, factor}
-    全部基于段内相对 beat（0 .. N）。换算成秒做 enable=between(t,start_sec,end_sec)。
+    ffmpeg setpts 表达式不支持内联 enable= 条件。正确做法：
+      1) split 输入到 N 份
+      2) 每份 trim + setpts（变速窗口用 setpts=PTS/(1/factor) 加速）
+      3) concat 拼回
 
-    ffmpeg setpts 在窗口内：
-      PTS / (1/factor)   即 PTS × factor  → 加速 factor 倍
-    窗口外：
-      PTS                原速
-
-    多窗口合并到一个 setpts 表达式：
-      setpts = sum_over_windows(
-          (PTS-STARTPTS) * factor_w * enable=between(t,s_w,e_w)   ← 窗口内
-        + (PTS-STARTPTS) * 1      * enable=not(between(t,s_w,e_w)) ← 该窗口外
-      )
-    所有非 1.0 窗口的条件叠加；因子 1.0 的窗口只贡献 "区间外保持原速" 的条件。
+    窗口格式：{kind, start_beat, end_beat, factor}
+    beat → 秒换算：sec = beat * beat_period
     """
     if not window_list:
         base = "setpts=PTS-STARTPTS"
         return base + ("," + RIFE_FILTER_CHAIN if with_rife else "")
 
-    speed_terms: list[str] = []
-    hold_terms: list[str] = []
-    for w in window_list:
+    # 把窗口按时间排序
+    windows = sorted(window_list, key=lambda w: float(w["start_beat"]))
+    n = len(windows)
+
+    # 1) split
+    split_labels = [f"[sv{i}]" for i in range(n)]
+    parts: list[str] = [f"[0:v]split={n}{''.join(split_labels)}"]
+
+    # 2) 每份 trim + setpts
+    out_labels = []
+    for i, w in enumerate(windows):
         s_sec = float(w["start_beat"]) * beat_period
         e_sec = float(w["end_beat"]) * beat_period
         f = float(w["factor"])
-        if abs(f - 1.0) >= 1e-3:
-            speed_terms.append(
-                f"(PTS-STARTPTS)*{f:.4f}*enable=between(t,{s_sec:.3f},{e_sec:.3f})"
-            )
-        hold_terms.append(
-            f"(PTS-STARTPTS)*enable=not(between(t,{s_sec:.3f},{e_sec:.3f}))"
+        if abs(f - 1.0) < 1e-3:
+            # 原速：trim + setpts=PTS-STARTPTS（重置 PTS）
+            expr = "setpts=PTS-STARTPTS"
+        else:
+            # 加速 factor 倍：setpts=(PTS-STARTPTS)/(1/factor)
+            # 数学：new_pts = (old_pts - STARTPTS) / factor + STARTPTS
+            # 即新 PTS 是原 PTS 的 1/factor → 帧时间压缩 → 播放加速 factor 倍
+            expr = f"setpts=(PTS-STARTPTS)/{f:.4f}"
+        out_label = f"[sv{i}_out]"
+        out_labels.append(out_label)
+        parts.append(
+            f"{split_labels[i]}trim={s_sec:.3f}:{e_sec:.3f},{expr}{out_label}"
         )
 
-    if not speed_terms and not hold_terms:
-        base = "setpts=PTS-STARTPTS"
-    elif not speed_terms:
-        base = "setpts=" + "+".join(hold_terms)
-    else:
-        base = "setpts=" + "+".join(speed_terms + hold_terms)
+    # 3) concat
+    concat_in = "".join(out_labels)
+    parts.append(
+        f"{concat_in}concat=n={n}:v=1:a=0[sped]"
+    )
 
+    base = ";\n".join(parts)
     if with_rife:
-        base = base + "," + RIFE_FILTER_CHAIN
+        # RIFE 插帧需要放在 [sped] 之后
+        base = base.replace("[sped]", "[sped_pre]")
+        base = base + ";\n[sped_pre]" + RIFE_FILTER_CHAIN + "[sped]"
     return base
 
 
@@ -175,16 +183,15 @@ def speed_one_shot(clip_path: Path, out_path: Path,
     strategy = sw.get("window_strategy", "hold")
     windows = sw.get("windows", []) if strategy != "hold" else []
 
-    filter_v = build_filter_for_window(windows, beat_period, with_rife=with_rife)
+    filter_complex = build_filter_for_window(windows, beat_period,
+                                              with_rife=with_rife)
 
-    if windows:
-        # 用分段 audio；这里简化为：drop 段内音频（后期 BGM 覆盖），只用 atempo
-        # 拼合段内音轨——但 v36 与 v35 一致：原音频丢弃，后期铺 BGM。
-        # 所以 audio filter 用空 asetpts，输出 -an。
+    if strategy == "hold" or not windows:
+        # 单 setpts → 用 -vf 即可
         cmd = [
             "ffmpeg", "-y",
             "-i", str(clip_path),
-            "-vf", filter_v,
+            "-vf", filter_complex,
             "-an",
             "-c:v", "libx264", "-crf", "20", "-preset", "fast",
             "-r", str(FPS),
@@ -192,11 +199,14 @@ def speed_one_shot(clip_path: Path, out_path: Path,
             str(out_path),
         ]
     else:
-        # 无变速窗口：直接 copy/re-encode
+        # 多窗口 → filter_complex，最后 map [sped]
+        # 把 [sped] 替换成 [vout] 给 -map 用
+        fc = filter_complex.replace("[sped]", "[vout]")
         cmd = [
             "ffmpeg", "-y",
             "-i", str(clip_path),
-            "-vf", "setpts=PTS-STARTPTS",
+            "-filter_complex", fc,
+            "-map", "[vout]",
             "-an",
             "-c:v", "libx264", "-crf", "20", "-preset", "fast",
             "-r", str(FPS),

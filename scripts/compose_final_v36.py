@@ -196,12 +196,28 @@ def build_xfade_filter_graph(
     return filter_complex, last_v, last_a, total_dur
 
 
+def detect_audio_in_inputs(input_paths: list[Path]) -> bool:
+    """探测输入 clips 是否含音频流。"""
+    for p in input_paths:
+        if not p.exists():
+            continue
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(p)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if r.stdout.strip():
+            return True
+    return False
+
+
 def build_full_cmd(
     input_paths: list[Path],
     segment_durations: list[float],
     transitions: list[dict],
     out_path: Path,
     bgm_path: Path | None,
+    has_input_audio: bool = False,
 ) -> tuple[list[str], float, str]:
     """构造完整 ffmpeg 命令（视频 xfade + 音频 acrossfade + 后期 BGM 铺底）。"""
     n_inputs = len(input_paths)
@@ -210,25 +226,74 @@ def build_full_cmd(
             f"input_paths {n_inputs} != segment_durations {len(segment_durations)}"
         )
 
-    filter_complex, out_v, out_a, total_dur = build_xfade_filter_graph(
-        n_inputs, segment_durations, transitions,
-    )
+    # 视频链：始终用 xfade
+    # 音频链：仅当输入含音频时使用 acrossfade；否则跳过
+    parts: list[str] = []
+    for i in range(n_inputs):
+        parts.append(
+            f"[{i}:v]format=yuv420p,scale={RES}:flags=lanczos,setsar=1:1,"
+            f"fps={FPS}[v{i}]"
+        )
+        if has_input_audio:
+            parts.append(
+                f"[{i}:a]aresample={ACROSSFADE_SR},"
+                f"aformat=sample_rates={ACROSSFADE_SR}:channel_layouts=stereo[a{i}]"
+            )
 
+    # xfade 累积式 offset
+    cursor = 0.0
+    xfade_durations = [
+        max(MIN_XFADE_DUR if t["transition_type"] == "hard_cut" else t["duration"],
+            MIN_XFADE_DUR)
+        for t in transitions
+    ]
+    last_v = "[v0]"
+    last_a = "[a0]" if has_input_audio else None
+    video_filter_complex = ";\n".join(parts)
+
+    parts2: list[str] = []
+    for i, trans in enumerate(transitions):
+        xfade_d = xfade_durations[i]
+        xfade_name = XFADE_NAME[trans["transition_type"]]
+        v_offset = round(cursor + segment_durations[i] - xfade_d, 4)
+        next_v = f"[v{i + 1}]"
+        out_v = f"[vout{i}]"
+        parts2.append(
+            f"{last_v}{next_v}xfade=transition={xfade_name}:"
+            f"duration={xfade_d:.3f}:offset={v_offset:.3f}{out_v}"
+        )
+        last_v = out_v
+        if has_input_audio:
+            next_a = f"[a{i + 1}]"
+            out_a = f"[aout{i}]"
+            parts2.append(
+                f"{last_a}{next_a}acrossfade=d={xfade_d:.3f}:c1=tri:c2=tri{out_a}"
+            )
+            last_a = out_a
+        cursor += segment_durations[i] + segment_durations[i + 1] - xfade_d
+
+    total_dur = sum(segment_durations) - sum(xfade_durations)
+    xfade_filter = ";\n".join(parts2)
+
+    full_filter = video_filter_complex + ";\n" + xfade_filter
+
+    # 音频输出：优先 BGM（任务书 v3.6 §1 拍点对齐 BGM）；如有输入音频则混音
     if bgm_path is not None and bgm_path.exists():
+        # 只用 BGM（拍点对齐），不用输入音频
         bgm_filter = (
             f"[{n_inputs}:a]atrim=0:{total_dur:.3f},asetpts=PTS-STARTPTS,"
             f"aformat=sample_rates={BG_FINAL_SR}:channel_layouts=stereo,"
             f"volume=0.85[bgm];"
             f"[bgm]alimiter=limit=0.95,loudnorm=I=-16:TP=-1:LRA=11[aout]"
         )
-        full_filter = filter_complex + ";\n" + bgm_filter
+        full_filter = full_filter + ";\n" + bgm_filter
         cmd = ["ffmpeg", "-y"]
         for p in input_paths:
             cmd += ["-i", str(p)]
         cmd += ["-i", str(bgm_path)]
         cmd += [
             "-filter_complex", full_filter,
-            "-map", out_v,
+            "-map", last_v,
             "-map", "[aout]",
             "-c:v", "libx264", "-crf", "20", "-preset", "fast",
             "-c:a", "aac", "-b:a", "192k", "-ar", str(BG_FINAL_SR),
@@ -236,23 +301,37 @@ def build_full_cmd(
             "-movflags", "+faststart",
             str(out_path),
         ]
-    else:
-        full_filter = filter_complex
+    elif has_input_audio:
+        full_filter = video_filter_complex + ";\n" + xfade_filter
         cmd = ["ffmpeg", "-y"]
         for p in input_paths:
             cmd += ["-i", str(p)]
         cmd += [
             "-filter_complex", full_filter,
-            "-map", out_v,
-            "-map", out_a,
+            "-map", last_v,
+            "-map", last_a,
             "-c:v", "libx264", "-crf", "20", "-preset", "fast",
             "-c:a", "aac", "-b:a", "192k", "-ar", str(ACROSSFADE_SR),
             "-r", str(FPS),
             "-movflags", "+faststart",
             str(out_path),
         ]
+    else:
+        # 无 BGM 也无输入音频：成片无声
+        cmd = ["ffmpeg", "-y"]
+        for p in input_paths:
+            cmd += ["-i", str(p)]
+        cmd += [
+            "-filter_complex", full_filter,
+            "-map", last_v,
+            "-c:v", "libx264", "-crf", "20", "-preset", "fast",
+            "-an",
+            "-r", str(FPS),
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
 
-    return cmd, total_dur, filter_complex
+    return cmd, total_dur, full_filter
 
 
 def main(argv=None) -> int:
@@ -315,9 +394,12 @@ def main(argv=None) -> int:
             return 4
 
     # 4) 构造 ffmpeg 命令
+    has_input_audio = detect_audio_in_inputs(input_paths)
+    print(f"[compose-v36] input audio detected: {has_input_audio}", flush=True)
     cmd, total_dur, filter_str = build_full_cmd(
         input_paths, durations, transitions_v36, out_path,
         bgm_path if (bgm_path and bgm_path.exists()) else None,
+        has_input_audio=has_input_audio,
     )
 
     fancy_used = sum(
