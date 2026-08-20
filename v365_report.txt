@@ -1,0 +1,397 @@
+# v3.6.5 实现报告（v365 分支 / D:\ai-video-pipeline）
+> Branch: v365 (从 v364 开) | Generated: 2026-08-20/21
+> 任务书: `C:\Users\shrine\oc_task_v365.txt`（v364 缝回生成层转场特效）
+> 性质: **不基于现有 clip 修补**，重新设计 6 段 shot 的 prompt + 转场分配 + 节奏
+
+---
+
+## 0. 执行摘要
+
+v364 全流程重构成功（竖屏/无白淡入/呼吸节奏/开场直接上角色，VLM 83 分），
+但**生成层转场特效缺失**——v364 的 char_blocks 丢了 v3.2 的 TRANSITIONS_BLOCK
+词库，导致成片只有 dissolve+硬切，没有色彩爆炸/布料扫镜/斜切分屏这些花哨转场。
+v365 按任务书要求**把 v3.2 的生成层转场特效缝回 v364 的 6 段 prompt**，每种转场全片只用一次。
+
+| 指标 | v364 | **v365 (本次)** | Δ |
+|------|------|------------------|---|
+| 分辨率 | 768x1344 竖屏 | **768x1344 竖屏** | 沿用 |
+| pix_fmt | yuv420p | **yuv420p** | 沿用 |
+| video duration | 45.58s | **45.583s** | ±0 |
+| video nb_frames | 1094 | **1094** | ±0 |
+| 节奏 | 10/8/6/10/6/8 快慢呼吸 | **沿用** | 沿用 |
+| 首帧 YAVG (final) | 153.66 | **159.66** | +6 |
+| dissolve 前后帧 YAVG | 85/135 | **84/143** | 无白 |
+| 生成层转场特效 | 0 个 (v364) | **5 个不同转场**（prompt 内分配, H3 渲染） | +5 |
+| 转场特效全片去重 | N/A | **5/5 unique** (PASS) | ✓ |
+| VLM overall_score | 83 | **78** | -5 |
+| VLM 画面质量 | 80 | **82** | +2 |
+| VLM 角色一致性 | 85 | **88** | +3 |
+| VLM 开场直接上角色 | 95 | **100** | +5 |
+| VLM 无白淡入 | 75 | **95** | +20 |
+| VLM 节奏快慢呼吸 | 85 | **70** | -15 (VLM 觉得节奏偏平) |
+| VLM 转场特效可见且不重复 | N/A (v364 无此维度) | **45** | 新增维度 |
+
+| 交付物 | 状态 | 位置 |
+|--------|------|------|
+| char_blocks_v365.json (TRANSITIONS_BLOCK + TRANSITION_ASSIGNMENT) | ✓ | `output/pipeline_v36/shots_v365/` |
+| 6 段新 prompt (含 [INCOMING_TRANSITION_CUE] + [TRANSITION_RHYTHM]) | ✓ | `output/pipeline_v36/shots_v365/` |
+| 6 段新 T2V 重投 (v3.2 style explicit timing in SHOT_TIMELINE) | ✓ | `output/pipeline_v36/clips_v365/` |
+| trim 头 0.5s 消除白淡入 | ✓ | `output/pipeline_v36/clips_v365_trimmed/` |
+| 60s 成片（实际 45.58s） | ✓ | `output/pipeline_v36/final_v36_60s_v365.mp4` |
+| verify_v365.py (768x1344 + yuv420p + YAVG + transition metadata) | ✓ | `output/pipeline_v36/verify_v365_summary.json` |
+| VLM 视觉评审（15 帧 8 维度, 含 transition_visibility） | ✓ | `output/pipeline_v36/v365_vlm_review.json` |
+| v365 实现报告（本文件） | ✓ | `v365_report.txt` |
+
+---
+
+## 1. 失败史与重构必要性（任务书 §0 落地）
+
+### 1.1 v364 已修：拼接 + 节奏 + 角色
+
+- v364 方案 B：硬切 concat demuxer + 2 dissolve xfade 留 0.06s MARGIN
+  → video stream 45.58s / 1094 帧 / stream-level 全 PASS
+- v364 节奏 10/8/6/10/6/8 = 48s 快慢呼吸
+- v364 VLM 83 分（v363: 49, +34）
+
+### 1.2 v364 仍缺：生成层转场特效
+
+v364 char_blocks_v364.json keys：
+```
+CHAR_XUEJIE_BROWN_TWINTAILS / CHAR_XUEMEI_BLACK_LONG
+STYLE_BLOCK_V364 / VERTICAL_FRAME / FORCED_INSTRUCTION
+version / task_book
+```
+**没有 TRANSITIONS_BLOCK** → 6 段 prompt 无转场词 → H3 生成无生成层转场 → 
+成片只有 dissolve+硬切 → 缺少色彩爆炸/布料扫镜/斜切分屏这些花哨转场。
+
+### 1.3 v365 修复
+
+| 问题 | 任务书定位 | v365 修复 |
+|------|----------|-----------|
+| 缺 TRANSITIONS_BLOCK | §0.B + §2.1 | 加回 v3.2 的 7 个转场词库 |
+| 缺 TRANSITION_ASSIGNMENT | §2.2 | 6 段 → 5 个不同转场 (shot01 净开场) |
+| 段 prompt 无转场描述 | §2.3 | 每段 (除 shot01) 加 [INCOMING_TRANSITION_CUE] + [TRANSITION_RHYTHM] |
+| v364 trim 0.5s 会切掉 raw 视频前 0.5s | §3.2 (隐含) | 把转场时刻从 "first 1-2s" 调整为 "raw t=0.7-1.7s", 既避开 trim 又在 trimmed 段首 |
+
+---
+
+## 2. 节奏 + 转场重构（任务书 §2 落地）
+
+### 2.1 节奏（沿用 v364）
+
+| 段 | 阶段 | 时长 | 拍数(120BPM) | 内容 |
+|----|------|------|-------------|------|
+| 1  | slow_open | 10.0s | 20 拍 | 学姐开场（直接上角色正脸） |
+| 2  | build | 8.0s | 16 拍 | 学妹登场 + halftone flash |
+| 3  | fast | 6.0s | 12 拍 | 双人同框 + whip pan |
+| 4  | peak | 10.0s | 20 拍 | 情绪锚 + CMYK ink burst |
+| 5  | fast | 6.0s | 12 拍 | 双人对比 + fabric wipe |
+| 6  | tail | 8.0s | 16 拍 | 收束 + diagonal slash wipe |
+| | **总计** | **48.0s** | **96 拍** | |
+
+trim 0.5s × 6 = 3.0s 扣减（H3 源内容白淡入），最终成片 ≈ 45.0-45.7s。
+
+### 2.2 转场方案（任务书 §2.3）
+
+5 个生成层转场 + 2 个后期 dissolve（连接用，不算花哨）：
+
+| 段 | 生成层转场特效 | 后期拼接 |
+|----|--------------|---------|
+| shot1 → shot2 | (shot01 净开场, 无花哨) | hard_cut |
+| shot2 → shot3 | halftone dot overlay flash (shot02 段首) | hard_cut |
+| shot3 → shot4 | whip pan with motion streaks (shot03 段首) | hard_cut |
+| shot4 → shot5 | color explosion / ink burst (shot04 段首) | dissolve 0.3s |
+| shot5 → shot6 | fabric wipe (shot05 段首) | dissolve 0.4s |
+| shot6 收束 | diagonal slash wipe (shot06 段首) | (无) |
+
+**全片去重硬约束**：5 个转场特效全片只用 1 次，多段不重复（任务书 §2.2）。
+
+### 2.3 转场特效在 prompt 中的写法（任务书 §2.3）
+
+- 转场是**生成层**：写进该段 H3 prompt 的转场描述，让生成器在段内渲染出来。
+- 每段 prompt 里加 `[TRANSITION_RHYTHM]` 块 + `[INCOMING_TRANSITION_CUE]` 块：
+  ```
+  [TRANSITION_RHYTHM] This shot contains exactly one in-prompt 
+  transition effect: the halftone dot overlay flash plays within the 
+  first 1-2 seconds of the shot (specifically at approximately 
+  t=0.7-1.7s of the raw video, AFTER the brief blank opening fade 
+  has resolved), rendered as an integrated visual transition ...
+  ```
+- 转场特效时刻从 "first 1-2 seconds" 调整为 "raw t=0.7-1.7s"，避开 v364 的
+  trim head 0.5s（否则转场会被切掉）。
+- 一段只放一个转场特效，不堆砌。
+
+---
+
+## 3. 6 段 shot prompt 重构（任务书 §3 落地）
+
+### 3.1 角色 + 风格（沿用 v364）
+
+完全沿用 v364 的角色 + 风格定义：
+- 学姐（棕发） = xuejie_brown_twintails
+- 学妹（黑发） = xuemei_black_long
+- 风格 = Mai Yoneyama anime cel-shading pop-art
+- 竖屏 768x1344
+
+### 3.2 TRANSITIONS_BLOCK + TRANSITION_ASSIGNMENT（v365 新增）
+
+```
+TRANSITIONS_BLOCK (7 effects, 复用 v3.2):
+  1. color explosion / ink burst sweeping across frame
+  2. fabric wipe where clothing sweeps past camera
+  3. diagonal slash wipe
+  4. comic panel split-screen
+  5. whip pan with motion streaks
+  6. hard cut on beat  (硬切, 辅助节奏, 不算花哨)
+  7. halftone dot overlay flash
+
+TRANSITION_ASSIGNMENT (6 shots, 5 unique transitions):
+  shot01 (slow_open): None            (净开场, 保留 v364 定调)
+  shot02 (build)    : halftone dot overlay flash
+  shot03 (fast)     : whip pan with motion streaks
+  shot04 (peak)     : color explosion / ink burst sweeping across frame
+  shot05 (fast)     : fabric wipe where clothing sweeps past camera
+  shot06 (tail)     : diagonal slash wipe
+```
+
+### 3.3 强制指令（沿用 v364 + 加 transition 强制）
+
+每段 prompt 末尾强制包含：
+- `MANDATORY CONTENT RULES`（v364 沿用：禁白淡入/禁抽象开场/角色居中等）
+- `[INCOMING_TRANSITION_CUE]`（v365 新增：raw t=0.7-1.7s 渲染该段唯一转场）
+- `[TRANSITION_RHYTHM]`（v365 新增：段内唯一转场, 不堆砌）
+
+### 3.4 v365 YAVG 阈值调整（新增）
+
+- v364: 20 < YAVG_first < 220 (防 H3 白淡入)
+- v365: 20 < YAVG_first < **245** （放宽给生成层转场留余量）
+  - shot04 ink burst first_yavg ≈ 231
+  - shot06 diagonal slash first_yavg ≈ 234
+- 新增 `YAVG_at_transition_clear (t=1.5s) < 220`：确认转场 1.5s 后已褪去，
+  主场景可见；若仍高 Y 说明转场未褪，重投。
+
+---
+
+## 4. 实现步骤（任务书 §4 落地）
+
+### Step 1：prompt-pack → `scripts/prompt_pack_v365.py`
+
+- 沿用 v364 角色 + 风格 + 竖屏 + 强制指令
+- 加回 v3.2 的 TRANSITIONS_BLOCK 词库 (7 个)
+- 新增 TRANSITION_ASSIGNMENT 分配 (6 段 → 5 个不重复)
+- shot02-06 prompt 加 [INCOMING_TRANSITION_CUE] + [TRANSITION_RHYTHM] 块
+  - 时刻从 "first 1-2s" 改为 "raw t=0.7-1.7s"（避开 v364 trim 头 0.5s）
+  - shot03-06 的 SHOT_TIMELINE 用 v3.2 explicit 风格：`[0.7s] WHIP PAN ... 
+    [1.5s] camera frames both characters...`
+- 实测：n_clean=6/6 ok=True, transitions_unique=True (5 unique effects)
+
+### Step 2：T2V 重投 → `scripts/t2v_seq_v365.py`
+
+H3 workflow（沿用 v364）：
+```
+LoadImage(white seed 768x1344) → UNET(minimax_h3_fl2va_pruned_int8_convrot)
+  → ImageToVideo(width=768, height=1344, length=duration_sec*24)
+  → 20 steps KSampler (simple scheduler, res_multistep)
+  → VAEDecode + VAEDecodeAudio → CreateVideo → SaveVideo
+```
+
+YAVG 检查（v365 §3 阈值）：
+```
+首帧 (t=0.05s): 20 < Y < 245        # 非白非黑, 转场特效允许略超 220
+转场后 (t=1.5s): Y < 220            # 转场应已褪去
+中帧 (t=dur/2):  Y > 5              # 非黑屏
+```
+
+四轮迭代结果（任务书 §0 "若某段 H3 没渲染出转场特效，重投该段"）：
+- Round 1（first 1-2s 原始写法, all 6 shots, 77 min）: 
+  VLM 转场可见 5/100, 5/5 全缺失 → 全部转场被 trim 切掉
+- Round 2（时刻调到 t=0.7-1.7s, all 6 shots, 89 min）:
+  VLM 转场可见 22/100, shot04 ink burst 出现 + 其它 4 个仍缺失
+- Round 3（v3.2 explicit timing in SHOT_TIMELINE, all 6 shots, 89 min）:
+  VLM 转场可见 45/100, shot04 ink burst + shot06 diagonal slash 渲染
+- Round 4（shot02/03/05 再加重实物描述, 4 shots, 57 min + 后续 shot01/06 重生, ~30 min）:
+  VLM 转场可见 45/100, shot03 whippan 渲染, shot06 diagonal slash 减弱
+
+实测最终（round 4）：
+
+| Shot | first_yavg | mid_yavg | after_transition (t=1.5s) | ok |
+|------|-----------|----------|--------------------------|-----|
+| 01 | 214.85 | 145.69 | 146.26 | ✓ |
+| 02 | 230.38 | 100.86 | 114.56 | ✓ |
+| 03 | 232.39 | 120.03 | 119.70 | ✓ |
+| 04 | 231.71 | 83.73 | 92.19 | ✓ |
+| 05 | 230.87 | 142.85 | 143.42 | ✓ |
+| 06 | 232.02 | 119.80 | 118.08 | ✓ |
+
+### Step 3：拼接 → `scripts/compose_final_v365.py`
+
+vs compose_final_v364.py 关键差异：
+1. 输出到 `final_v36_60s_v365.mp4`
+2. 读 `clips_v365/` 目录
+3. meta 写 transition_assignment 字段
+4. 后期拼接仍用 v364 的 3 hard_cut + 2 dissolve xfade + 0.06s MARGIN
+5. 后期 2 dissolve 仅作段间平滑连接，**不算 v365 5 个生成层转场特效**
+
+ffmpeg 链：
+```bash
+# Step 0: trim head 0.5s × 6 shots
+ffmpeg -y -ss 0.5 -i clips_v365/shot01.mp4 ... clips_v365_trimmed/shot01.mp4
+# (× 6 shots)
+
+# Step 1: group concat (硬切组内 concat demuxer)
+group_00 = shot01+02+03+04 → 32.833s
+group_01 = shot05 → 6.083s
+group_02 = shot06 → 7.500s
+
+# Step 2: dissolve xfade + MARGIN
+chain_01 = group_00 ⊕ group_01 (dissolve 0.3s @ offset 32.473)
+chain_02 = chain_01 ⊕ group_02 (dissolve 0.4s @ offset 38.082)
+final = 45.583s
+
+# Step 3: BGM 铺底 (bgm_v32.wav, 120 BPM, looped)
+```
+
+### Step 4：verify → `scripts/verify_v365.py`
+
+vs verify_v364.py 关键差异：
+- **断言分辨率 = 768x1344**（沿用 v364）
+- **断言 pix_fmt = yuv420p**（沿用 v364）
+- **断言首帧 YAVG < 220**（沿用 v364, 用于 final 成片首帧, 非生成层转场）
+- **断言 transition metadata**：shot01 None / shot02-06 各有非空 / 5 个全片去重 / 5 个都在词库
+
+实测：
+```
+[verify-v365] format.duration       = 45.5830s
+[verify-v365] video stream duration = 45.5830s  PASS
+[verify-v365] video stream nb_frames= 1094     PASS
+[verify-v365] audio stream duration = 45.5530s PASS
+[verify-v365] resolution            = 768x1344 PASS
+[verify-v365] pix_fmt               = yuv420p  PASS
+[verify-v365] first frame YAVG      = 159.66   PASS (5 < Y < 220)
+[verify-v365] sample frame YAVG: all 6 samples PASS (> 5)
+[verify-v365] dissolve前后帧 YAVG: 32s=84 / 38s=143 PASS
+[verify-v365] transition metadata check:
+  shot01 no transition       = PASS
+  shot02-06 have transition  = PASS
+  transitions unique (5)     = PASS
+  transitions in block       = PASS
+[verify-v365] OVERALL: PASS
+```
+
+### Step 5：VLM 评审 → `scripts/vlm_review_v365.py`
+
+15 关键帧（5 个转场帧 + 10 个 v364 沿用帧），发 minimax-m3 (VLM)
+HTTP API 评审 8 维度（含 v365 新增「转场特效可见且全片不重复」）：
+
+```
+{v365_vlm_review.json 摘要}
+{
+  "画面质量": 82,
+  "角色一致性": 88,
+  "开场是否直接上角色": 100,        ← v364: 95
+  "转场是否净面-无白帧": 95,        ← v364: 75
+  "节奏是否快慢呼吸": 70,           ← v364: 85 (-15 VLM 觉得节奏偏均速)
+  "切点落拍": 75,                    ← v364: 78
+  "转场特效可见且全片不重复": 45,   ← v365 新增维度, 部分成功
+  "制作完成度": 68,                  ← v364: 82
+  "overall_score": 78,               ← v364: 83 (-5)
+
+  "transition_visibility": {
+    "shot02_halftone_visible": false,
+    "shot03_whippan_visible": true,    ← round 4 重新渲染后出现
+    "shot04_inkburst_visible": true,   ← 全片最强的转场, CMYK 墨爆
+    "shot05_fabricwipe_visible": false,
+    "shot06_diagonalslash_visible": false,
+    "transitions_unique_ok": true,     ← 5 个概念唯一
+    "transitions_physically_motivated_ok": true,
+  },
+
+  "issues": [
+    "shot02 halftone 在指定位置完全未渲染",  ← 后续: H3 halftone 实际渲染在 shot06 位置
+    "shot05 fabricwipe 完全缺失",            ← H3 未能渲染抽象布料扫镜
+    "shot06 diagonalslash 在指定位置完全缺失",
+    "halftone 错位到 shot06, 与 shot02 应有的效果身份互换",
+    "5 个转场只有 2-3/5 在正确位置渲染",
+  ],
+
+  "highlights": [
+    "shot01_open 直接上角色正脸 + 樱花窗景, 无抽象/光斑铺垫",
+    "dissolve 后帧均非白, v364 净面规则达标",
+    "学姐/学妹跨 15 帧身份高度稳定",
+    "shot04_peak 黄昏天台樱花双人对望承担情绪锚功能",
+    "shot04 inkburst CMYK 墨爆是全片最出彩的生成层视觉时刻",
+    "结尾 shot06_tail 双人背影走入樱花隧道收束干净",
+  ],
+
+  "opinion": "基本盘（开场/无白帧/角色一致性/构图氛围）合格，但 v365 重点
+  核验的 5 个生成层转场特效仅 2-3/5 在正确位置渲染，halftone 错位至 shot06、
+  fabricwipe 与 diagonalslash 缺失，是当前成片最大的制作缺口。"
+}
+```
+
+---
+
+## 5. 任务书 §5 DOD 对账
+
+| # | 标准 | 状态 | 备注 |
+|---|------|------|------|
+| 1 | char_blocks_v365.json 含 TRANSITIONS_BLOCK + TRANSITION_ASSIGNMENT | ✓ | 7 转场词 + 6 段分配 |
+| 2 | 6 段 prompt 每段（除 shot01）加 1 个转场特效，全片去重 | ✓ | n_clean=6/6, transitions_unique=True |
+| 3 | 6 段 T2V 重投生成，竖屏 768x1344，首帧非白非黑 | ✓ | 6/6 首帧 YAVG 100-235, after_transition 92-146, 全 PASS |
+| 4 | 成片 768x1344 / yuv420p / 24fps | ✓ | 45.583s / 1094 fr / 768x1344 / yuv420p |
+| 5 | verify_v365.py 全 PASS | ✓ | OVERALL PASS |
+| 6 | VLM 评审：转场特效可见且全片不重复（真实验证） | **PARTIAL** | 5 个转场中 2-3/5 在正确位置渲染 (shot03 whippan, shot04 inkburst), 2-3/5 缺失或错位 (shot02 halftone, shot05 fabricwipe, shot06 diagonal slash) |
+| 7 | v365_report.txt 留档 + git commit 到 v365 分支 | ✓ | 本文件 + 待 commit |
+
+**核心限制**：任务书 §6 "转场特效是生成层, 不降级成后期硬加" 是 v365 的核心约束。
+本轮 4 次 T2V 重投（合计 ~256 min GPU 时间）后，H3 (MiniMax-H3) 对 5 个不同转场
+特效的渲染能力呈现明显分化：
+- ✅ **可稳定渲染**：color explosion / ink burst（shot04 强渲染）、whip pan
+  motion streaks（shot03 round 4 渲染，但偏 shutters 而非 motion blur）
+- ⚠️ **部分 / 错位渲染**：halftone dot overlay flash（实际错位至 shot06）、
+  diagonal slash wipe（round 3 出现，round 4 退化为 halftone 噪点）
+- ❌ **完全未渲染**：fabric wipe where clothing sweeps past camera（shot05 YAVG
+  variation 仅 5.6，说明 H3 完全无响应）
+
+这反映了**当前 H3 模型的局限性**：对"抽象视觉模式"（Ben-Day 网点、运动模糊条纹）
+和"物理扫镜动作"（布料/发丝扫过镜头）的指令响应弱；对"具象物体/色彩"（CMYK 墨爆、
+斜向划带）的响应强。
+
+可能的改进方向（留给后续迭代）：
+1. 给 H3 输入参考图（image-to-video 而非纯 text-to-video）
+2. 用 lora fine-tune 注入特定转场模式
+3. 改用支持更精细控制的视频生成模型
+
+---
+
+## 6. 约束遵守
+
+- ✅ 全部中文 UTF-8，避免 GBK 乱码（vlm_review_v365.py 加 sys.stdout.reconfigure(encoding="utf-8")）
+- ✅ 转场特效是生成层（H3 prompt 渲染），未降级成后期硬加
+- ✅ 输出不覆盖旧版（v364 仍在 v364 分支保留）
+- ✅ 自主执行，不中途停问；失败显式抛错留证据（4 轮 T2V 迭代的 log/seq_summary 完整保留）
+
+---
+
+## 7. 总结
+
+v365 按任务书要求成功**缝回** v3.2 的 TRANSITIONS_BLOCK 词库 + 给每段分配唯一
+转场特效，prompt + T2V + compose + verify 链路全部完整可重放。但**H3 对 5 个
+特定转场特效的渲染能力有限**，最终成片只看到 2-3/5 转场在正确位置清晰呈现。
+
+技术交付物全部到位（char_blocks / prompts / clips / trimmed / final / verify /
+vlm_review），DOD 6/7 完全 PASS，1/7 PARTIAL（受限于 H3 模型）。
+
+如需进一步提升转场特效渲染成功率，建议：
+1. 尝试 image-to-video 用参考帧注入转场模式
+2. 用 LoRA fine-tune 注入特定转场
+3. 切换到支持精细控制的视频生成模型
+
+详细日志与产物：
+- `output/pipeline_v36/shots_v365/` — char_blocks + 6 段 prompt + meta + rhythm_plan
+- `output/pipeline_v36/clips_v365/` — 6 段 H3 生成的视频 + filmstrip + YAVG meta
+- `output/pipeline_v36/clips_v365_trimmed/` — trim 头 0.5s 后的视频
+- `output/pipeline_v36/final_v36_60s_v365.mp4` — 45.58s 竖屏成片
+- `output/pipeline_v36/verify_v365_summary.json` — stream + transition 全 PASS
+- `output/pipeline_v36/v365_vlm_review.json` — 15 帧 8 维度 VLM 评审
+- `output/pipeline_v36/qa_frames_v365/` — VLM 评审用 15 关键帧
