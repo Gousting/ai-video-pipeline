@@ -60,6 +60,17 @@ v3.6.7（v367）已跑通"参考视频视觉识别 + ReferenceToVideo 参考直�
 - v366/v365 已包含在 main 历史中（作为 v367 祖先）
 - 当前 checkout：v367 分支（清晰度优化待续）
 
+## 5.5 项目边界（2026-08-21 明确）
+
+**当前唯一主项目：ai-video-pipeline**（Gousting/ai-video-pipeline，宿主机 D:\ai-video-pipeline，Python 脚本自行构造 MiniMaxH3ReferenceToVideo workflow，零 wind-comic 代码依赖）。
+
+**wind-comic 已废弃归档**（2026-08-21）：
+- 宿主机：D:\wind-comic → D:\_archive\wind-comic-archived_20260821
+- 本地：~/reference/ai-video-pipeline（⚠️ 此目录名起得混乱，内部实为 wind-comic 源码，Next.js 应用）→ ~/reference/_archive/wind-comic-archived_20260821
+- 废弃理由：其 I2V（首尾帧参考生成）能力已被 ai-video-pipeline 的 v367 ReferenceToVideo 参考直出全面覆盖
+
+⚠️ **目录命名提醒**：本地 ~/reference/ai-video-pipeline 曾误装 wind-comic 源码。真正的 avp 在宿主机 D:\ai-video-pipeline。以后涉及"ai-video-pipeline"一律指宿主机 D:\ai-video-pipeline（远端 Gousting/ai-video-pipeline），本地 reference 下的同名目录已归档清理。
+
 ## 6. 关键经验（防止重蹈覆辙）
 
 1. **H3 生成 prompt 前必须先用 VLM 看图**，识别参考视频真实风格，不能凭空写
