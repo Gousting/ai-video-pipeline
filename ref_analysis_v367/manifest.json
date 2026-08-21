@@ -1,0 +1,95 @@
+{
+  "ref_video": "D:\\ai-video-pipeline\\input_h3_pv_ref.mp4",
+  "extracted_at": "2026-08-21T13:58:50",
+  "n_frames": 12,
+  "times_sec": [
+    0.2,
+    1.37,
+    3.5,
+    8.0,
+    10.6,
+    12.27,
+    14.03,
+    15.67,
+    20.87,
+    24.97,
+    27.27,
+    30.5
+  ],
+  "frames": [
+    {
+      "idx": 1,
+      "t_sec": 0.2,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_01_t0.20s.jpg",
+      "size_bytes": 121301
+    },
+    {
+      "idx": 2,
+      "t_sec": 1.37,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_02_t1.37s.jpg",
+      "size_bytes": 78477
+    },
+    {
+      "idx": 3,
+      "t_sec": 3.5,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_03_t3.50s.jpg",
+      "size_bytes": 123968
+    },
+    {
+      "idx": 4,
+      "t_sec": 8.0,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_04_t8.00s.jpg",
+      "size_bytes": 108288
+    },
+    {
+      "idx": 5,
+      "t_sec": 10.6,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_05_t10.60s.jpg",
+      "size_bytes": 27814
+    },
+    {
+      "idx": 6,
+      "t_sec": 12.27,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_06_t12.27s.jpg",
+      "size_bytes": 71370
+    },
+    {
+      "idx": 7,
+      "t_sec": 14.03,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_07_t14.03s.jpg",
+      "size_bytes": 94601
+    },
+    {
+      "idx": 8,
+      "t_sec": 15.67,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_08_t15.67s.jpg",
+      "size_bytes": 94646
+    },
+    {
+      "idx": 9,
+      "t_sec": 20.87,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_09_t20.87s.jpg",
+      "size_bytes": 99694
+    },
+    {
+      "idx": 10,
+      "t_sec": 24.97,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_10_t24.97s.jpg",
+      "size_bytes": 112425
+    },
+    {
+      "idx": 11,
+      "t_sec": 27.27,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_11_t27.27s.jpg",
+      "size_bytes": 117850
+    },
+    {
+      "idx": 12,
+      "t_sec": 30.5,
+      "path": "D:\\ai-video-pipeline\\ref_analysis_v367\\frames\\frame_12_t30.50s.jpg",
+      "size_bytes": 91309
+    }
+  ],
+  "filmstrip_path": "D:\\ai-video-pipeline\\ref_analysis_v367\\filmstrip_4x3.jpg",
+  "task_book_section": "oc_task_v367.txt §2.1"
+}

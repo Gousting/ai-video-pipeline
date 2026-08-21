@@ -1,0 +1,118 @@
+======================================================================
+v3.6.7 任务报告 — 参考视频视觉识别驱动 + ReferenceToVideo 参考直出
+======================================================================
+生成时间: 2026-08-21 14:53:13
+
+## 1. VLM 视觉风格档案摘要 (v367_style_profile.md)
+--------------------------------------------------
+- 类型: Anime music-video / fashion-editorial motion graphics
+- 一句话风格: Hyper-saturated CMYK pop-art anime with prismatic rainbow details, acid-neon streetwear and graphic color-field transitions, shot as macro close-ups in a 2.36:1 widescreen format.
+- 适合 H3 R2V: True
+- 角色数: 1
+  - Color Riot Girl: 一致性=72/100
+    发型/发色: Long straight black hair with blunt bangs, loose flowing strands, occasional teal/blue underlayer and rainbow streaks visible at tips / Black with cyan/teal underlayer and rainbow prismatic highlights
+    瞳色: Prismatic rainbow shifting (rainbow → emerald-green-yellow depending on scene)
+    服装: Neon streetwear — acid-green cropped jacket/shorts with zipper detail, black thigh strap/garter belt, multicolored ear cuffs and piercings, long stiletto nails painted alternating cobalt-blue and hot-magenta
+- 主色: Vivid red (#E8252A) / Cobalt blue (#1A2FE0) / Canary yellow (#F2EC2B)
+- 辅色: Cyan / electric aqua (#25E6E2) / Hot magenta / pink (#E61FB4) / Acid lime green (#9FE02B)
+- 调色: CMYK pop-art / Risograph neon / Y2K cyber-rave
+- 画风: Cel-shaded anime with painterly 3D hybrid close-ups and flat 2D graphic plates / Fashion-editorial anime / 90s-2000s pop-art revival
+
+完整档案路径: D:\ai-video-pipeline\ref_analysis_v367\v367_style_profile.md
+VLM 原始 JSON: D:\ai-video-pipeline\ref_analysis_v367\v367_vlm_raw.json
+
+## 2. 生成节点 & 参考图
+--------------------------------------------------
+- 节点: MiniMaxH3ReferenceToVideo (vs v366: MiniMaxH3ImageToVideo)
+- ref_image_size: max (任务书 §1, 身份保真最好)
+- 参考图来源: input_h3_pv_ref.mp4 (1358x576 / 30fps / 31.33s)
+- 参考图张数: 4
+  - ref #01 t=0.20s -> ref_01_t0.20s.jpg (118 KB)
+  - ref #04 t=8.00s -> ref_04_t8.00s.jpg (105 KB)
+  - ref #07 t=14.03s -> ref_07_t14.03s.jpg (92 KB)
+  - ref #11 t=27.27s -> ref_11_t27.27s.jpg (115 KB)
+- 选择理由: Per VLM visual profile (v367_style_profile.md §1): frame_01 full face + rainbow tear-drip; frame_04 split-panel face with multi-piercings; frame_07 full figure with acid-lime green outfit; frame_11 close-up face with rainbow streaks + pointing finger
+
+## 3. 成片路径 + verify + 色彩对比参考数据
+--------------------------------------------------
+- 成片: D:\ai-video-pipeline\output\pipeline_v36\final_v36_60s_v367.mp4
+  size: 16080 KB
+- Verify JSON: D:\ai-video-pipeline\output\pipeline_v36\verify_v367_summary.json
+  overall: PASS
+  duration: 40.958s (expected 40.0 ± 1.5s, delta=+0.958s)
+  nb_frames: 983 (delta=+23)
+  resolution: 1344x576
+  pix_fmt: yuv420p
+  first_frame_yavg: 115.8 (PASS)
+
+**色彩对比参考视频 (任务书 §4 §6 核心):**
+  - n_pairs: 8
+  - min cosine: 0.8190
+  - mean cosine: 0.9219
+  - max cosine: 0.9575
+  - mean RGB delta: [5, 5, 3]
+  - mean RGB similarity: 0.9826
+  - ok_histogram: True (threshold 0.65)
+  - ok_mean_rgb_similarity: True
+
+  Per-pair:
+    ref_t= 1.96s  out_t= 2.56s  cos=0.9533  ref_RGB=[98, 88, 94]  out_RGB=[111, 82, 71]
+    ref_t= 5.88s  out_t= 7.68s  cos=0.9476  ref_RGB=[68, 65, 71]  out_RGB=[95, 88, 72]
+    ref_t= 9.79s  out_t=12.80s  cos=0.9483  ref_RGB=[96, 75, 80]  out_RGB=[82, 94, 95]
+    ref_t=13.71s  out_t=17.92s  cos=0.9175  ref_RGB=[102, 102, 105]  out_RGB=[124, 116, 73]
+    ref_t=17.62s  out_t=23.04s  cos=0.8866  ref_RGB=[128, 117, 122]  out_RGB=[74, 63, 127]
+    ref_t=21.54s  out_t=28.16s  cos=0.8190  ref_RGB=[106, 59, 79]  out_RGB=[102, 60, 94]
+    ref_t=25.46s  out_t=33.28s  cos=0.9452  ref_RGB=[97, 70, 101]  out_RGB=[63, 95, 96]
+    ref_t=29.38s  out_t=38.40s  cos=0.9575  ref_RGB=[96, 86, 103]  out_RGB=[99, 105, 102]
+
+## 4. 人物稳定性 / 色彩风格漂移评估
+--------------------------------------------------
+- 色彩风格漂移: ✓ 无明显色彩/风格漂移 (mean cos >= 0.85)
+- 人物一致性 (R2V + 4 ref_images): 沿用参考视频的 Color Riot Girl, 每段都引用 VLM character/style/color/lighting 4 个 block
+- YAVG 段内漂移: 6/6 样本在阈值内
+- YAVG 段级漂移: 6/6 段 PASS
+
+## 5. 遗留问题
+--------------------------------------------------
+- VLM 视觉档案提到参考视频存在 'rapid scene/costume changes' 风险, shot05 split-screen 在某些段可能因 ref_images 多样化导致身份轻微漂移 (本轮 shot05 YAVG 102-105 在安全区, 但 verify cosine=0.819 是 8 对里最低, 需后续 shot05 prompt 微调)
+- Ref-to-Video 在 4 ref_images + ref_image_size=max 下慢, shot01/04/06 (8s) 耗时 ~490s; 若需提速可改 ref_image_size=match
+- 任务书 §6 提到 '失败显式抛错', 本轮无失败, 但 YAVG 检查阈值 (白帧 >245, 黑帧 <5) 与 v366 相同, 如需更严可调
+- VLM 风险: 'Eye color drift between rainbow and green-yellow across shots may confuse identity'. 后续可固定 eye_color block 单一描述, 减少模型自由发挥
+
+## 6. 生成时间统计
+--------------------------------------------------
+  shot02: 273.4s
+  shot03: 302.2s
+  shot04: 493.3s
+  shot05: 283.1s
+  shot06: 493.8s
+
+## 7. v367 交付物清单
+--------------------------------------------------
+  - ref_analysis_v367/v367_style_profile.md
+  - ref_analysis_v367/v367_vlm_raw.json
+  - ref_analysis_v367/filmstrip_4x3.jpg
+  - ref_analysis_v367/frames/ (12 frames)
+  - scripts/analyze_ref_v367.py
+  - scripts/vlm_analyze_ref_v367.py
+  - scripts/prepare_ref_images_v367.py
+  - scripts/prompt_pack_v367.py
+  - scripts/t2v_seq_v367.py
+  - scripts/compose_final_v367.py
+  - scripts/verify_v367.py
+  - output/pipeline_v36/ref_images_v367/ (4 ref jpgs + manifest)
+  - output/pipeline_v36/shots_v367/ (6 prompts + 6 meta + char_blocks + rhythm_plan + verify)
+  - output/pipeline_v36/clips_v367/ (6 shot clips + qa/selfcheck)
+  - output/pipeline_v36/final_v36_60s_v367.mp4
+  - output/pipeline_v36/final_v36_60s_v367_meta.json
+  - output/pipeline_v36/verify_v367_summary.json
+  - output/pipeline_v36/qa_frames_v367/color_compare/
+  - v367_report.txt
+
+## 8. v366 -> v367 关键变更
+--------------------------------------------------
+1. 视觉档案: v366 完全不参考参考视频, v367 用 VLM 看 12 帧 → Color Riot Girl 单角色 fashion editorial MV
+2. 节点: v366 用 MiniMaxH3ImageToVideo (首帧续写, 锁不住参考); v367 用 MiniMaxH3ReferenceToVideo (参考 token 贯穿每个采样步)
+3. 参考图: v366 用单张 first_frame (shot01) + 上段尾帧 (shot02-06); v367 用 4 张 ref_images (t=0.20/8.00/14.03/27.27s) + ref_image_size=max
+4. 段间依赖: v366 链式 (一段失败影响后段); v367 独立 (一段失败不污染其他)
+5. 验证: v366 只看段间链式一致; v367 加了『与参考视频的色彩直方图对比』(mean cos=0.9219 强对齐, RGB similarity=0.9826)
