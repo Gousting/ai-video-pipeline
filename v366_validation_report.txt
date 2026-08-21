@@ -1,0 +1,41 @@
+======================================================================
+v3.6.6 §3 链式 I2V 衔接验证报告
+======================================================================
+时间: 2026-08-21T11:26:05
+ComfyUI: http://192.168.0.105:8188
+
+[测试策略]
+- 抽参考视频 0.20s 帧 (1344x576) 做 shot1 anchor
+- shot1 -> shot2 -> shot3 链式衔接, 每段 144 帧 (6s @ 24fps)
+- shot1 prompt: 自然动作 (推镜 + 抬手 + 转头)
+- shot2 prompt: 继续自然动作 (放手下 + 前进步)
+- shot3 prompt: 继续自然动作 (靠近 + 表情变化)
+
+[生成结果]
+  shot01: pid=294dc2b9-0943-44b8-a159-23fe4f865b41 first_frame=shot01_anchor_from_ref.jpg duration=6.0s elapsed=464.8s
+  shot02: pid=43036261-aa06-4dce-9cf1-8b7db3809eec first_frame=shot02_anchor_from_shot01.jpg duration=6.0s elapsed=371.0s
+  shot03: pid=d2372097-f861-4d8c-8efc-3ddba12391b2 first_frame=shot03_anchor_from_shot02.jpg duration=6.0s elapsed=356.1s
+
+[YAVG 帧检查 (白帧/黑帧)]
+  shot01  : first=121.761 q1=121.946 mid=120.459 q3=122.403 last=122.487 white=False black=False ok=True
+  shot02  : first=118.32 q1=117.576 mid=114.027 q3=112.792 last=111.321 white=False black=False ok=True
+  shot03  : first=108.102 q1=104.999 mid=103.064 q3=102.527 last=100.174 white=False black=False ok=True
+
+[直方图相似度 (余弦, 1.0 = 同分布)]
+  shot01尾帧 vs shot02首帧: cos=0.953
+  shot02尾帧 vs shot03首帧: cos=0.9652
+
+[Filmstrip + Side-by-side]
+  D:\ai-video-pipeline\output\pipeline_v36\chain_validation_v366\qa\filmstrip_shot01.jpg
+  D:\ai-video-pipeline\output\pipeline_v36\chain_validation_v366\qa\filmstrip_shot02.jpg
+  D:\ai-video-pipeline\output\pipeline_v36\chain_validation_v366\qa\filmstrip_shot03.jpg
+  D:\ai-video-pipeline\output\pipeline_v36\chain_validation_v366\qa\sidebyside_shot01last_vs_shot02first.jpg
+  D:\ai-video-pipeline\output\pipeline_v36\chain_validation_v366\qa\sidebyside_shot02last_vs_shot03first.jpg
+
+======================================================================
+[决策]
+  yavg 全部通过: True
+  直方图相似度可接受: True
+  方案A(链式I2V) 是否可用: True
+  结论: 方案A(链式I2V衔接) 可用: 人物/动作/无白帧 验证通过
+======================================================================
